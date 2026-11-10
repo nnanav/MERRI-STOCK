@@ -1,4 +1,4 @@
-# --- Python ---
+﻿# --- Python ---
 __pycache__/
 *.py[cod]
 *.pyo
@@ -11,7 +11,8 @@ env/
 # --- Streamlit ---
 .streamlit/
 
-# --- Folder hasil/diagnostik (dapat dibuat ulang) ---
+# --- Hasil pengujian (dibuat ulang saat program jalan) ---
+output/
 diagnostik/
 diagnostik_v2/
 diagnostik_v3/
@@ -22,7 +23,10 @@ hasil_uji_produk/
 # --- Log & file sementara ---
 *.log
 *.tmp
+out_*.txt
+cer_*.txt
+hasil_*.txt
 ~$*
 
-# Catatan: folder dataset/, models/, dan data_* TIDAK diabaikan
-# agar proyek dapat direproduksi.
+# Catatan: dataset/, models/, data_* dan archive/ TIDAK diabaikan
+# agar proyek tetap dapat direproduksi dan backup tersedia.

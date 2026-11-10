@@ -400,6 +400,47 @@ def pisah_jumlah_satuan(crop):
     }
 
 
+def _pecah_gugus(proj, a, b, char_w):
+    """
+    Pecah satu gugus kolom bertinta [a..b] menjadi beberapa batas karakter.
+
+    Tiap gugus dibuat menjadi sel selebar maksimum ~1.15 * char_w (dibatasi
+    kira-kira satu karakter), lalu batas tiap sel digeser ke lembah tinta
+    terdekat agar tidak memotong huruf di tengah.
+    """
+    lebar = b - a + 1
+    if lebar <= 1.15 * char_w:
+        return [(a, b)]
+
+    n_sel = max(1, int(np.ceil(lebar / (1.15 * char_w))))
+    lebar_sel = lebar / n_sel
+
+    batas = []
+    for k in range(n_sel):
+        s = a + int(round(k * lebar_sel))
+        e = a + int(round((k + 1) * lebar_sel)) - 1
+        if k > 0:
+            # Geser batas kiri ke lembah tinta terdekat di sekitar titik.
+            lo = max(a + 1, s - int(0.35 * char_w))
+            hi = min(b, s + int(0.35 * char_w))
+            if hi > lo:
+                s = lo + int(np.argmin(proj[lo:hi]))
+        batas.append([s, e])
+
+    # Rapatkan agar tidak ada celah/tumpang-tindih.
+    hasil = []
+    for k, (s, e) in enumerate(batas):
+        if k < len(batas) - 1:
+            e = max(s, batas[k + 1][0] - 1)
+        else:
+            e = b
+        s = max(a, s)
+        e = min(b, e)
+        if e >= s:
+            hasil.append((s, e))
+    return hasil
+
+
 def segmentasi_per_karakter(crop, skala=2):
     """
     Segmentasi satu baris teks menjadi karakter terpisah.
@@ -435,7 +476,23 @@ def segmentasi_per_karakter(crop, skala=2):
     if tinggi < 3:
         return {"biner": biner, "karakter": [], "skala": skala}
 
-    char_w = max(3.0, 0.62 * tinggi)
+    # Estimasi lebar satu karakter dari komponen tunggal (bukan gugus).
+    lebar_komp = []
+    for i in range(1, n):
+        w_komp = stats[i, 2]
+        h_komp = stats[i, 3]
+        a_komp = stats[i, 4]
+        if (
+            h_komp >= 0.55 * tinggi
+            and a_komp >= ambang_luas
+            and w_komp <= 1.3 * tinggi
+        ):
+            lebar_komp.append(int(w_komp))
+    if len(lebar_komp) >= 3:
+        char_w = float(np.median(lebar_komp))
+    else:
+        char_w = 0.50 * tinggi
+    char_w = max(3.0, char_w)
 
     proj = np.count_nonzero(biner, axis=0)
     ambang_ink = max(1, int(0.02 * tinggi))
@@ -456,24 +513,7 @@ def segmentasi_per_karakter(crop, skala=2):
 
     batas = []
     for a, b in runs:
-        lebar = b - a + 1
-        n_seg = max(1, int(round(lebar / char_w)))
-        if n_seg == 1:
-            batas.append((a, b))
-            continue
-        # Bagi gugus lebar pada lembah proyeksi terdekat titik bagi rata.
-        titik = [a]
-        for k in range(1, n_seg):
-            target = a + round(k * lebar / n_seg)
-            lo = max(a + 1, target - int(0.25 * char_w))
-            hi = min(b - 1, target + int(0.25 * char_w))
-            if hi <= lo:
-                titik.append(target)
-            else:
-                titik.append(lo + int(np.argmin(proj[lo:hi + 1])))
-        titik.append(b + 1)
-        for k in range(n_seg):
-            batas.append((titik[k], titik[k + 1] - 1))
+        batas.extend(_pecah_gugus(proj, a, b, char_w))
 
     karakter = []
     for (x1, x2) in batas:

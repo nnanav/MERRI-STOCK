@@ -82,7 +82,7 @@ def deteksi_komponen(biner):
     hasil = []
 
     for x, y, w, h, area in stats[1:]:
-        if area >= 5 and h >= 3 and w >= 2:
+        if area >= 12 and h >= 4 and w >= 2:
             hasil.append((
                 int(x), int(y),
                 int(w), int(h)
@@ -133,37 +133,37 @@ def calon_batas(blob, tinggi_acuan):
         mode="same"
     )
 
-    langkah = max(
-        3,
-        round(tinggi_acuan * 0.14)
-    )
-
     batas = {0, w}
 
-    # Kandidat batas di sekitar
-    # bagian tinta yang lebih tipis.
-    for p in range(langkah, w, langkah):
-        a = max(1, p - langkah // 2)
-        b = min(
-            w - 1,
-            p + langkah // 2 + 1
-        )
+    # 1) Kolom tanpa tinta = celah pasti antar karakter. Titik tengah
+    #    setiap celah dijadikan batas agar huruf terpisah tidak menyatu.
+    kolom_kosong = proyeksi == 0
+    i = 0
+    while i < w:
+        if kolom_kosong[i]:
+            j = i
+            while j < w and kolom_kosong[j]:
+                j += 1
+            if (j - i) >= 2:
+                batas.add((i + j) // 2)
+            i = j
+        else:
+            i += 1
 
-        if b > a:
-            posisi = a + int(
-                np.argmin(halus[a:b])
-            )
-            batas.add(posisi)
-
-    ambang = np.percentile(halus, 35)
-
-    for p in range(2, w - 2):
+    # 2) Lembah proyeksi lokal untuk huruf yang benar-benar menempel.
+    ambang = np.percentile(halus, 30)
+    for p in range(1, w - 1):
         if (
-            halus[p] <= halus[p-1]
-            and halus[p] <= halus[p+1]
+            halus[p] <= halus[p - 1]
+            and halus[p] <= halus[p + 1]
             and halus[p] <= ambang
         ):
             batas.add(p)
+
+    # 3) Grid tetap sebagai cadangan pilihan DP.
+    langkah = max(3, round(tinggi_acuan * 0.12))
+    for p in range(langkah, w, langkah):
+        batas.add(p)
 
     return sorted(batas)
 
@@ -179,19 +179,20 @@ def skor_potongan(
     model,
     labels,
     templates,
-    label_tm
+    label_tm,
+    penalti=0.55
 ):
     pasangan = []
     array = []
 
     min_w = max(
-        3,
-        int(0.17 * tinggi_acuan)
+        2,
+        int(0.10 * tinggi_acuan)
     )
 
     max_w = max(
         min_w + 1,
-        int(1.30 * tinggi_acuan)
+        int(0.95 * tinggi_acuan)
     )
 
     for i in range(len(batas) - 1):
@@ -269,8 +270,12 @@ def skor_potongan(
                     )
                 )
             )
-            - 0.55
+            - penalti
         )
+
+        # Penalti tambahan bila potongan jauh lebih lebar dari satu karakter.
+        if panjang > 0.85 * tinggi_acuan:
+            nilai -= 0.8 * (panjang / max(tinggi_acuan, 1) - 0.85)
 
         # Bonus kecil jika prediksi sama.
         if labels[c] == label_tm[t]:
@@ -343,6 +348,134 @@ def pilih_batas(batas, skor):
 # SEGMENTASI UTAMA
 # =========================================
 
+def _prediksi_potongan(blob_kolom, model, labels, templates, label_tm):
+    # Prediksi satu potongan (CNN + Template Matching).
+    pot = normalisasi_potongan(blob_kolom)
+    if pot is None:
+        return None
+    X = pot.astype(np.float32).reshape(1, 32, 32, 1) / 255.0
+    prob = model.predict(X, verbose=0)[0]
+    c = int(np.argmax(prob))
+    pc = float(prob[c])
+    V = X.reshape(1, -1)
+    V = V / np.maximum(np.linalg.norm(V, axis=1, keepdims=True), 1e-8)
+    sim = V @ templates.T
+    t = int(np.argmax(sim[0]))
+    pt = float(sim[0, t])
+    return labels[c], label_tm[t], pc, pt
+
+
+def _pecah_lebar(blob, a, b, char_w, model, labels, templates, label_tm,
+                 kedalaman=0):
+    """
+    Pecah segmen [a..b] yang jauh lebih lebar dari satu karakter.
+
+    Dipotong rekursif di lembah tinta terdekat titik tengah, sehingga
+    huruf yang menempel tetap terpisah. Tiap potongan diprediksi ulang
+    agar label tetap sesuai isinya.
+    """
+    lebar = b - a
+    if lebar <= 1.45 * char_w or kedalaman >= 3:
+        pr = _prediksi_potongan(blob[:, a:b], model, labels, templates, label_tm)
+        if pr is None:
+            return []
+        c, t, pc, pt = pr
+        return [(a, b, ("split", c, t, pc, pt))]
+
+    proyeksi = np.count_nonzero(blob[:, a:b], axis=0).astype(np.float32)
+    tengah = lebar // 2
+    lo = max(1, tengah - int(0.4 * char_w))
+    hi = min(lebar - 1, tengah + int(0.4 * char_w))
+    pos = tengah if hi <= lo else lo + int(np.argmin(proyeksi[lo:hi]))
+
+    kiri = _pecah_lebar(blob, a, a + pos, char_w,
+                        model, labels, templates, label_tm, kedalaman + 1)
+    kanan = _pecah_lebar(blob, a + pos, b, char_w,
+                         model, labels, templates, label_tm, kedalaman + 1)
+    return kiri + kanan
+
+
+def segmentasi_karakter_tm(gambar, model, labels, templates, label_tm):
+    """
+    Alur utama sesuai metode penelitian:
+    Template Matching menentukan posisi/pola karakter, lalu CNN
+    mengklasifikasikan setiap kandidat yang ditemukan.
+
+    Koordinat keluaran memakai ruang upsampled (SKALA) agar sama dengan
+    segmentasi_karakter sehingga pemanggil tidak perlu diubah.
+    """
+    from processing.lokalisasi_template import cari_kandidat_karakter
+
+    biner = binarisasi(gambar)
+    kandidat = cari_kandidat_karakter(gambar)
+    if not kandidat:
+        return biner, []
+
+    hasil = []
+    for k in kandidat:
+        x1 = int(k["x1"] * SKALA)
+        y1 = int(k["y1"] * SKALA)
+        x2 = int(k["x2"] * SKALA)
+        y2 = int(k["y2"] * SKALA)
+
+        y1 = max(0, min(biner.shape[0] - 2, y1))
+        y2 = max(y1 + 2, min(biner.shape[0], y2))
+        x1 = max(0, min(biner.shape[1] - 2, x1))
+        x2 = max(x1 + 2, min(biner.shape[1], x2))
+
+        potongan = biner[y1:y2, x1:x2]
+        pr = _prediksi_potongan(potongan, model, labels, templates, label_tm)
+        if pr is None:
+            continue
+        c, t, pc, pt = pr
+
+        hasil.append({
+            "x1": x1,
+            "y1": y1,
+            "x2": x2,
+            "y2": y2,
+            "cnn": c,
+            "tm": k.get("template", t),
+            "pc": pc,
+            "pt": float(k.get("skor", pt)),
+            "status": "KANDIDAT",
+        })
+
+    hasil.sort(key=lambda z: (z["x1"], z["y1"]))
+    return biner, hasil
+
+
+def segmentasi_utama(gambar, model=None, labels=None, templates=None,
+                     label_tm=None, utamakan_tm=False):
+    """
+    Menjalankan pipeline pengenalan karakter.
+
+    - utamakan_tm=False (default): segmentasi proyeksi + DP, lalu CNN.
+      Ini jalur yang terbukti stabil pada data nota proyek ini.
+    - utamakan_tm=True: Template Matching menentukan posisi/pola lebih
+      dahulu, lalu CNN mengklasifikasi. Disediakan untuk eksperimen
+      metode; pada pengujian, hasilnya masih di bawah jalur proyeksi.
+
+    Mengembalikan (biner, hasil, metode).
+    """
+    if model is None:
+        model, labels = muat_cnn()
+    if templates is None:
+        templates, label_tm = muat_templates()
+
+    if utamakan_tm:
+        biner, hasil = segmentasi_karakter_tm(
+            gambar, model, labels, templates, label_tm
+        )
+        if len(hasil) >= 3:
+            return biner, hasil, "template_matching"
+
+    biner, hasil = segmentasi_karakter(
+        gambar, model, labels, templates, label_tm
+    )
+    return biner, hasil, "proyeksi"
+
+
 def segmentasi_karakter(
     gambar,
     model=None,
@@ -375,6 +508,46 @@ def segmentasi_karakter(
         ])
     )
 
+    # Buang noise yang berada di luar pita vertikal baris teks.
+    pusat = [
+        y + h / 2 for _, y, _, h in komponen
+        if h >= 0.5 * tinggi_acuan
+    ]
+    if pusat:
+        cy_med = float(np.median(pusat))
+        komponen = [
+            k for k in komponen
+            if (cy_med - 0.75 * tinggi_acuan)
+            <= (k[1] + k[3] / 2)
+            <= (cy_med + 0.75 * tinggi_acuan)
+        ]
+
+    # Buang minus pembuka daftar: hanya komponen paling kiri yang pipih
+    # dan lebar. Minus di dalam kode produk (mis. K-300) tidak tersentuh
+    # karena bukan komponen paling kiri.
+    if komponen:
+        kiri = min(komponen, key=lambda k: k[0])
+        _, _, w_kiri, h_kiri = kiri
+        if (
+            h_kiri <= 0.45 * tinggi_acuan
+            and 1.3 * h_kiri <= w_kiri <= 1.4 * tinggi_acuan
+        ):
+            komponen = [k for k in komponen if k != kiri]
+
+    if not komponen:
+        return biner, []
+
+    # Estimasi lebar satu karakter untuk memecah segmen yang terlalu lebar.
+    lebar_satu = [
+        w0 for (_, _, w0, h0) in komponen
+        if h0 >= 0.55 * tinggi_acuan
+        and 0.15 * tinggi_acuan <= w0 <= 1.10 * tinggi_acuan
+    ]
+    if len(lebar_satu) >= 3:
+        char_w_est = float(np.median(lebar_satu))
+    else:
+        char_w_est = 0.55 * tinggi_acuan
+
     hasil = []
 
     for x, y, w, h in komponen:
@@ -382,7 +555,6 @@ def segmentasi_karakter(
             y:y+h,
             x:x+w
         ]
-
         # Hanya komponen lebar yang
         # dicoba dipisahkan lebih lanjut.
         is_lebar = (
@@ -398,6 +570,17 @@ def segmentasi_karakter(
         else:
             batas = [0, w]
 
+        # Objek yang jauh lebih lebar dari satu karakter pasti berisi
+        # beberapa karakter, jadi penalti per-karakter diturunkan agar
+        # DP cenderung memisahkan (bukan menggabung).
+        rasio_lebar = w / max(tinggi_acuan, 1.0)
+        if rasio_lebar > 1.5:
+            penalti_blob = 0.15
+        elif rasio_lebar > 1.2:
+            penalti_blob = 0.35
+        else:
+            penalti_blob = 0.55
+
         nilai = skor_potongan(
             blob,
             batas,
@@ -405,7 +588,8 @@ def segmentasi_karakter(
             model,
             labels,
             templates,
-            label_tm
+            label_tm,
+            penalti=penalti_blob
         )
 
         potong = pilih_batas(
@@ -428,21 +612,38 @@ def segmentasi_karakter(
             continue
 
         for a, b, info in potong:
-            _, c, t, pc, pt = info
+            # Pecah lagi hanya bila segmen memang cukup lebar untuk memuat
+            # lebih dari satu karakter. Syarat tinggi menjaga agar huruf
+            # tunggal lebar (mis. 'P', 'M') tidak ikut terpecah.
+            lebar_seg = b - a
+            cukup_lebar = (
+                lebar_seg > 1.45 * char_w_est
+                and lebar_seg > 1.15 * tinggi_acuan
+            )
 
-            hasil.append({
-                "x1": x+a,
-                "y1": y,
-                "x2": x+b,
-                "y2": y+h,
-                "cnn": c,
-                "tm": t,
-                "pc": pc,
-                "pt": pt,
-                "status": "KANDIDAT"
-            })
+            if cukup_lebar:
+                bagian = _pecah_lebar(
+                    blob, a, b, char_w_est,
+                    model, labels, templates, label_tm
+                )
+            else:
+                bagian = [(a, b, info)]
 
-    return biner, sorted(
+            for aa, bb, info2 in bagian:
+                _, c, t, pc, pt = info2
+                hasil.append({
+                    "x1": x + aa,
+                    "y1": y,
+                    "x2": x + bb,
+                    "y2": y + h,
+                    "cnn": c,
+                    "tm": t,
+                    "pc": pc,
+                    "pt": pt,
+                    "status": "KANDIDAT"
+                })
+
+    hasil = sorted(
         hasil,
         key=lambda z: (
             z["x1"],
@@ -450,10 +651,107 @@ def segmentasi_karakter(
         )
     )
 
+    # Buang sisa tanda baca label (mis. ':') di awal/akhir field.
+    try:
+        tinggi_acuan_final = float(
+            np.median([max(1, s["y2"] - s["y1"]) for s in hasil])
+        ) if hasil else float(tinggi_acuan)
+        hasil = rapikan_segmen(hasil, tinggi_acuan_final)
+    except Exception:
+        pass
+
+    return biner, hasil
+
 
 # =========================================
 # MENYUSUN HASIL MENJADI TEKS
 # =========================================
+
+def rapikan_segmen(hasil, tinggi_acuan):
+    """
+    Merapikan hasil segmentasi sebelum disusun menjadi teks.
+
+    Membuang segmen pengganggu di awal/akhir yang bukan bagian isi field,
+    yaitu tanda baca berdiri sendiri seperti ':' atau '=' yang tersisa
+    dari label nota (mis. "Proyek :").
+
+    Tidak mengubah urutan maupun karakter sah di tengah.
+    """
+    if not hasil:
+        return hasil
+
+    hasil = sorted(hasil, key=lambda z: z["x1"])
+
+    buang = {":", "=", "~", "_", "|"}
+
+    def pengganggu(item):
+        return item.get("cnn", "") in buang
+
+    while len(hasil) > 2 and pengganggu(hasil[0]):
+        hasil = hasil[1:]
+    while len(hasil) > 2 and pengganggu(hasil[-1]):
+        hasil = hasil[:-1]
+
+    return hasil
+
+
+def gabung_segmen_menempel(hasil, biner, tinggi_acuan,
+                           model, labels, templates, label_tm):
+    """
+    Menggabungkan dua segmen bersebelahan yang tintanya saling menempel
+    (celah sangat kecil), lalu memprediksi ulang potongan gabungan.
+
+    Hanya dilakukan bila lebar gabungan masih wajar untuk satu karakter,
+    sehingga karakter yang sah tidak ikut tergabung.
+    """
+    if not hasil or biner is None:
+        return hasil
+
+    ambang_celah = max(1, int(0.06 * tinggi_acuan))
+    batas_lebar = 1.15 * tinggi_acuan
+
+    hasil = sorted(hasil, key=lambda z: z["x1"])
+    keluaran = []
+    i = 0
+
+    while i < len(hasil):
+        if i == len(hasil) - 1:
+            keluaran.append(hasil[i])
+            break
+
+        kiri = hasil[i]
+        kanan = hasil[i + 1]
+        celah = kanan["x1"] - kiri["x2"]
+        lebar = kanan["x2"] - kiri["x1"]
+
+        if celah <= ambang_celah and lebar <= batas_lebar:
+            y1 = min(kiri["y1"], kanan["y1"])
+            y2 = max(kiri["y2"], kanan["y2"])
+            x1, x2 = kiri["x1"], kanan["x2"]
+
+            potong = biner[
+                max(0, y1):min(biner.shape[0], y2),
+                max(0, x1):min(biner.shape[1], x2),
+            ]
+
+            pred = _prediksi_potongan(
+                potong, model, labels, templates, label_tm
+            )
+            if pred is not None:
+                c, t, pc, pt = pred
+                keluaran.append({
+                    "x1": x1, "y1": y1, "x2": x2, "y2": y2,
+                    "cnn": c, "tm": t, "pc": pc, "pt": pt,
+                    "status": "KANDIDAT",
+                })
+                i += 2
+                continue
+
+        keluaran.append(kiri)
+        i += 1
+
+    return keluaran
+
 
 def susun_teks(
     hasil,
@@ -463,21 +761,37 @@ def susun_teks(
     teks = ""
     akhir = None
 
-    for item in hasil:
+    # Hitung ulang tinggi acuan dari data segmen agar konsisten, dan ukur
+    # celah antarkarakter untuk mendeteksi spasi antarkata.
+    if hasil:
+        tinggi_seg = np.median([max(1, s["y2"] - s["y1"]) for s in hasil])
+        tinggi_acuan = float(tinggi_seg)
+    if tinggi_acuan <= 0:
+        tinggi_acuan = 12.0
 
-        if (
-            akhir is not None
-            and item["x1"] - akhir
-            > 0.58 * tinggi_acuan
-        ):
-            teks += " "
+    celah = []
+    for i in range(1, len(hasil)):
+        celah.append(hasil[i]["x1"] - hasil[i - 1]["x2"])
+
+    # Ambang spasi adaptif: celah jauh lebih besar dari celah antarkarakter
+    # biasa (median) sekaligus cukup besar terhadap tinggi teks.
+    if celah:
+        celah_med = float(np.median(celah))
+        ambang_spasi = max(
+            0.22 * tinggi_acuan,
+            celah_med + 0.25 * tinggi_acuan,
+        )
+    else:
+        ambang_spasi = 0.30 * tinggi_acuan
+
+    for i, item in enumerate(hasil):
+        if i > 0:
+            gap = item["x1"] - hasil[i - 1]["x2"]
+            if gap > ambang_spasi:
+                teks += " "
 
         teks += item[metode]
-
-        akhir = max(
-            item["x2"],
-            akhir or 0
-        )
+        akhir = max(item["x2"], akhir or 0)
 
     return teks
 

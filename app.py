@@ -4,9 +4,12 @@ import cv2
 import numpy as np
 import streamlit as st
 
-from uji_deteksi_baris import deteksi_baris
-from processing.deteksi_field import deteksi_produk, deteksi_field_lain
-from processing.lokasi_field_lama import cari_area_field
+from processing.deteksi_baris import deteksi_baris
+from processing.deteksi_field import (
+    deteksi_produk, deteksi_field_lain,
+    deteksi_penerima_proyek, deteksi_harga_satuan,
+    pangkas_awalan_tipis, pangkas_hingga_rp,
+)
 from processing.pemrosesan_field import (
     isolasi_nomor, bersihkan_minus, pisah_jumlah_satuan,
     cari_tanggal, baca_gambar, mask_merah, segmentasi_per_karakter,
@@ -85,22 +88,51 @@ def muat_semua_model():
     return model, labels, templates, label_tm
 
 
+def bersihkan_tepi(teks):
+    # Buang sisa tanda baca/label di awal dan akhir hasil OCR.
+    if not teks:
+        return teks
+
+    teks = teks.strip()
+    tepi = ":;=|~_-,. "
+
+    # Buang berulang sampai tidak ada lagi yang bisa dibuang.
+    sebelum = None
+    while sebelum != teks:
+        sebelum = teks
+        teks = teks.strip(tepi)
+
+    # Sisa label di awal seperti "P, " atau "P " (dari kata "Proyek").
+    import re
+    teks = re.sub(r"^[Pp][,\s.]+", "", teks)
+
+    return teks.strip()
+
+
 def kenali_crop(crop, pakai_clahe=False):
-    # Segmentasi karakter + pengenalan CNN dan Template Matching.
-    from processing.segmentasi_karakter import segmentasi_karakter, susun_teks
+    # Satu pipeline OCR: TM menemukan posisi karakter, CNN mengklasifikasi.
+    from processing.segmentasi_karakter import segmentasi_utama, susun_teks
+    from processing.pengenalan_karakter import gabung_segmen
     model, labels, templates, label_tm = muat_semua_model()
     img = ke_tigakanal(crop)
     if img is None or img.size == 0:
-        return {"cnn": "", "tm": "", "n": 0, "status": "crop_kosong"}
+        return {"teks": "", "cnn": "", "tm": "", "n": 0, "detail": [],
+                "metode": "-", "status": "crop_kosong"}
     if pakai_clahe:
         img = terapkan_clahe(img)
-    biner, hasil = segmentasi_karakter(img, model, labels, templates, label_tm)
+    biner, hasil, metode = segmentasi_utama(
+        img, model, labels, templates, label_tm
+    )
     tinggi = [s["y2"] - s["y1"] for s in hasil]
     ta = float(np.median(tinggi)) if tinggi else 12.0
+    hasil_final, detail = gabung_segmen(hasil)
     return {
+        "teks": bersihkan_tepi(susun_teks(hasil_final, "final", ta)),
         "cnn": susun_teks(hasil, "cnn", ta),
         "tm": susun_teks(hasil, "tm", ta),
         "n": len(hasil),
+        "detail": detail,
+        "metode": metode,
         "status": "ok",
     }
 
@@ -162,9 +194,8 @@ def jalankan_deteksi(gambar_bgr):
 
     nomor = isolasi_nomor(kecil)
 
-    lok, err = cari_area_field(kecil)
-    region_tanggal = lok["tanggal"] if (lok and "tanggal" in lok) else None
-    tanggal = cari_tanggal(kecil, lokasi_tanggal=region_tanggal)
+    penerima, proyek = deteksi_penerima_proyek(kandidat, W, H)
+    harga = deteksi_harga_satuan(kandidat, W, H, produk)
 
     fields = []
 
@@ -177,14 +208,29 @@ def jalankan_deteksi(gambar_bgr):
         "pesan": nomor.get("pesan", ""),
     })
 
-    fields.append({
-        "id": "tanggal", "label": "Tanggal", "jenis": "tanggal",
-        "bbox": tanggal.get("kandidat_bbox"),
-        "crop_ocr": tanggal.get("kandidat"),
-        "crop_show": tanggal.get("kandidat"),
-        "status": tanggal.get("status"),
-        "pesan": tanggal.get("pesan", ""),
-    })
+    def field_dari_kotak(fid, label, jenis, kotak):
+        crop = potong(kecil, kotak) if kotak is not None else None
+        if crop is not None and jenis == "harga":
+            crop = pangkas_hingga_rp(crop)
+        elif crop is not None and jenis in ("penerima", "proyek"):
+            crop = pangkas_awalan_tipis(crop)
+        # Bila crop dipangkas, sesuaikan bbox agar kotak di UI ikut pas.
+        bbox = None
+        if kotak is not None:
+            lebar_asli = int(kotak["x2"]) - int(kotak["x1"])
+            lebar_crop = crop.shape[1] if crop is not None else lebar_asli
+            bbox = (int(kotak["x1"]), int(kotak["y1"]),
+                    int(kotak["x1"]) + int(lebar_crop), int(kotak["y2"]))
+        return {
+            "id": fid, "label": label, "jenis": jenis,
+            "bbox": bbox,
+            "crop_ocr": crop, "crop_show": crop,
+            "status": "ok" if crop is not None else "tidak_terdeteksi",
+            "pesan": label,
+        }
+
+    fields.append(field_dari_kotak("penerima", "Nama Penerima", "penerima", penerima))
+    fields.append(field_dari_kotak("proyek", "Proyek", "proyek", proyek))
 
     for i, p in enumerate(produk, 1):
         crop = potong(kecil, p)
@@ -193,7 +239,8 @@ def jalankan_deteksi(gambar_bgr):
 
         rincian = info["rincian_produk"][i - 1] if i - 1 < len(info["rincian_produk"]) else {}
         kj = rincian.get("jumlah_satuan")
-        kotak_j = kotak_s = crop_j = crop_s = None
+        kotak_j = crop_j = None
+        kotak_s = crop_s = None
 
         if kj is not None:
             # Perluas ke kiri agar token jumlah yang terpotong ikut masuk.
@@ -230,11 +277,15 @@ def jalankan_deteksi(gambar_bgr):
             "status": "ok" if crop_s is not None else "tidak_terdeteksi",
             "pesan": "satuan",
         })
+        fields.append(field_dari_kotak(
+            f"harga_{i}", f"Harga Satuan {i}", "harga",
+            harga[i - 1] if i - 1 < len(harga) else None,
+        ))
 
     return {
         "kecil": kecil, "biner": biner, "visual": visual,
-        "kandidat": kandidat, "nomor": nomor, "tanggal": tanggal,
-        "produk": produk, "fields": fields, "err_tanggal": err,
+        "kandidat": kandidat, "nomor": nomor,
+        "produk": produk, "fields": fields,
     }
 
 
@@ -243,10 +294,12 @@ def gambar_kotak_field(kecil, fields):
     vis = kecil.copy()
     warna = {
         "nomor": (0, 0, 255),
-        "tanggal": (0, 140, 255),
+        "penerima": (0, 140, 255),
+        "proyek": (255, 140, 0),
         "produk": (0, 160, 0),
         "jumlah": (255, 0, 0),
-        "satuan": (180, 0, 180),
+        "satuan": (0, 200, 200),
+        "harga": (180, 0, 180),
     }
     for f in fields:
         bb = f.get("bbox")
@@ -265,18 +318,56 @@ def ambil_deteksi():
     return st.session_state.get("deteksi")
 
 
-def gambar_kotak_karakter(crop):
-    # Gambar bounding box per karakter (target: satu kotak satu karakter).
+def segmen_field(crop):
+    # Segmentasi per karakter memakai pipeline sebenarnya (CNN+Template
+    # Matching + dynamic programming), agar kotak yang ditampilkan sama
+    # dengan yang dipakai pengenalan. Fallback ke proyeksi bila gagal.
     cimg = ke_tigakanal(crop)
     if cimg is None or cimg.size == 0:
-        return None, []
-    hasil = segmentasi_per_karakter(cimg)
-    karakter = hasil["karakter"]
+        return None, [], None, "", []
+
+    try:
+        from processing.segmentasi_karakter import (
+            segmentasi_utama, susun_teks, SKALA,
+        )
+        from processing.pengenalan_karakter import gabung_segmen
+        model, labels, templates, label_tm = muat_semua_model()
+        biner, hasil, metode = segmentasi_utama(
+            cimg, model, labels, templates, label_tm
+        )
+        final, detail = gabung_segmen(hasil)
+        tinggi = [s["y2"] - s["y1"] for s in hasil]
+        ta = float(np.median(tinggi)) if tinggi else 12.0
+        teks = susun_teks(final, "final", ta) if final else ""
+
+        # Koordinat hasil berada di ruang upsampled (SKALA x); kembalikan
+        # ke ukuran crop asli agar kotak pas.
+        h, w = cimg.shape[:2]
+        karakter = []
+        for s in hasil:
+            karakter.append({
+                "x1": int(s["x1"] / SKALA), "y1": int(s["y1"] / SKALA),
+                "x2": min(w, int(s["x2"] / SKALA)),
+                "y2": min(h, int(s["y2"] / SKALA)),
+                "cnn": s.get("cnn", ""), "tm": s.get("tm", ""),
+                "final": s.get("final", ""),
+            })
+        biner_tampil = cv2.resize(
+            biner, (w, h), interpolation=cv2.INTER_AREA
+        ) if biner is not None else None
+        return _gambar_kotak(cimg, karakter), karakter, biner_tampil, teks, detail
+    except Exception:
+        hasil = segmentasi_per_karakter(cimg)
+        karakter = hasil["karakter"]
+        return _gambar_kotak(cimg, karakter), karakter, hasil.get("biner"), "", []
+
+
+def _gambar_kotak(cimg, karakter):
     vis = cimg.copy()
     for i, k in enumerate(karakter):
         warna = (0, 170, 0) if i % 2 == 0 else (0, 0, 255)
         cv2.rectangle(vis, (k["x1"], k["y1"]), (k["x2"], k["y2"]), warna, 1)
-    return vis, karakter
+    return vis
 
 
 def halaman_upload():
@@ -332,7 +423,6 @@ def halaman_preprocessing():
 
     abu = cv2.cvtColor(gambar, cv2.COLOR_BGR2GRAY)
     _, otsu = cv2.threshold(abu, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    clahe_bgr = terapkan_clahe(gambar)
     merah = mask_merah(gambar)
 
     st.subheader("Mask merah nomor nota")
@@ -347,15 +437,14 @@ def halaman_preprocessing():
 
     st.subheader("Tahapan preprocessing")
     c, d = st.columns(2)
-    c.image(abu, caption="Grayscale", use_container_width=True)
-    d.image(otsu, caption="Binarisasi Otsu", use_container_width=True)
+    c.image(gambar_rgb(gambar), caption="Asli", use_container_width=True)
     e, f = st.columns(2)
-    e.image(gambar_rgb(gambar), caption="Asli", use_container_width=True)
-    f.image(gambar_rgb(clahe_bgr), caption="Dengan CLAHE", use_container_width=True)
+    e.image(abu, caption="Grayscale", use_container_width=True)
+    f.image(otsu, caption="Binarisasi Otsu", use_container_width=True)
 
     st.caption(
-        "Jalur tanpa CLAHE dan dengan CLAHE memakai lokasi field yang sama, "
-        "sehingga perbedaan hasil berasal dari CLAHE."
+        "Preprocessing memakai grayscale dan binarisasi Otsu. "
+        "Hasil preprocessing inilah yang dipakai tahap segmentasi karakter."
     )
 
 
@@ -376,7 +465,10 @@ def halaman_segmentasi():
              use_container_width=True)
 
     st.subheader("Crop dan segmentasi per karakter")
-    st.caption("Target segmentasi: satu bounding box untuk satu karakter.")
+    st.caption(
+        "Kotak berasal dari pipeline pengenalan sebenarnya (CNN + Template "
+        "Matching), target satu bounding box untuk satu karakter."
+    )
     for f in det["fields"]:
         with st.expander(f["label"]):
             crop = f["crop_show"]
@@ -384,14 +476,21 @@ def halaman_segmentasi():
                 st.warning("Crop field ini tidak tersedia.")
                 continue
 
-            kiri, kanan = st.columns(2)
-            kiri.caption("Hasil crop")
-            kiri.image(gambar_rgb(crop), use_container_width=True)
+            vis, karakter, biner, teks, _detail = segmen_field(crop)
 
-            vis, karakter = gambar_kotak_karakter(crop)
-            kanan.caption(f"Segmentasi per karakter ({len(karakter)} kotak)")
+            kiri, kanan = st.columns(2)
+            kiri.caption("Crop asli")
+            kiri.image(gambar_rgb(crop), use_container_width=True)
+            if biner is not None:
+                kanan.caption("Binarisasi")
+                kanan.image(biner, use_container_width=True)
+
+            st.caption(f"Bounding box karakter ({len(karakter)} kotak)")
             if vis is not None:
-                kanan.image(gambar_rgb(vis), use_container_width=True)
+                st.image(gambar_rgb(vis), use_container_width=True)
+
+            if teks:
+                st.caption(f"Hasil pengenalan (label CNN): {teks}")
 
             if karakter:
                 st.caption("Potongan tiap karakter:")
@@ -402,6 +501,8 @@ def halaman_segmentasi():
                     seg = crop[k["y1"]:k["y2"], k["x1"]:k["x2"]]
                     if getattr(seg, "size", 0):
                         kol[i].image(gambar_rgb(seg), use_container_width=True)
+                        if k.get("final"):
+                            kol[i].caption(k["final"])
 
 
 def kenali_satu(crop, pakai_clahe):
@@ -437,68 +538,107 @@ def halaman_pengenalan():
         st.info("Klik 'Proses Nota' di halaman Upload terlebih dahulu.")
         return
 
-    sertakan = st.checkbox(
-        "Sertakan jalur CLAHE (perbandingan)", value=True, key="cek_clahe"
-    )
-
-    kunci = (st.session_state.get("nama_file"), bool(sertakan))
+    kunci = (st.session_state.get("nama_file"),)
     if st.session_state.get("ocr_kunci") != kunci or st.session_state.get("ocr_semua") is None:
-        with st.spinner("Mengenali semua field (CNN + Template Matching)..."):
-            st.session_state["ocr_semua"] = jalankan_ocr_semua(det, sertakan)
+        with st.spinner("Mengenali semua field (segmentasi + TM + CNN)..."):
+            st.session_state["ocr_semua"] = jalankan_ocr_semua(det, False)
             st.session_state["ocr_kunci"] = kunci
 
     hasil = st.session_state["ocr_semua"]
 
     st.subheader("Hasil pengenalan semua field")
+    st.caption(
+        "Segmentasi menemukan kandidat karakter, Template Matching mencocokkan "
+        "polanya, dan CNN menentukan label akhir. Hasil di bawah adalah satu "
+        "teks OCR per field (label dari CNN)."
+    )
     baris = []
     for f in det["fields"]:
         h = hasil.get(f["id"], {})
         t = h.get("tanpa", {})
-        c = h.get("clahe", {})
         row = {
             "Field": f["label"],
-            "CNN": t.get("cnn", "") or "—",
-            "Template Matching": t.get("tm", "") or "—",
+            "Hasil OCR (label CNN)": t.get("teks", "") or "—",
             "Jumlah karakter": t.get("n", 0),
         }
-        if sertakan:
-            row["CNN (CLAHE)"] = c.get("cnn", "") or "—"
-            row["TM (CLAHE)"] = c.get("tm", "") or "—"
         baris.append(row)
     st.dataframe(baris, use_container_width=True, hide_index=True)
 
-    st.subheader("Detail per field")
+    st.subheader("Detail prediksi per field")
     for f in det["fields"]:
         h = hasil.get(f["id"], {})
         t = h.get("tanpa", {})
         with st.expander(f["label"]):
             if f["crop_show"] is not None and getattr(f["crop_show"], "size", 0):
                 st.image(gambar_rgb(f["crop_show"]), width=300)
-            st.write("CNN:", t.get("cnn", "") or "—")
-            st.write("Template Matching:", t.get("tm", "") or "—")
+            st.write("Hasil OCR (label CNN):", t.get("teks", "") or "—")
+            tm_only = t.get("tm", "") or "—"
+            st.caption(
+                "Pola hasil Template Matching (informasi pendukung): " + tm_only
+            )
+            detail = t.get("detail", [])
+            if detail:
+                tabel_detail = []
+                for i, d in enumerate(detail, 1):
+                    tabel_detail.append({
+                        "Karakter ke": i,
+                        "CNN (label)": d.get("cnn", ""),
+                        "p_CNN": d.get("pc"),
+                        "Pola TM": d.get("tm", ""),
+                        "p_TM": d.get("pt"),
+                        "Dukungan TM": d.get("dukungan_tm", ""),
+                        "Aturan": d.get("aturan", ""),
+                    })
+                st.dataframe(tabel_detail, use_container_width=True, hide_index=True)
             if t.get("status", "").startswith("gagal"):
                 st.warning(t["status"])
 
 
-def halaman_preparation():
-    st.header("Preparation")
+def halaman_business_understanding():
+    st.header("Business Understanding")
 
-    st.subheader("Latar belakang")
-    st.write(
-        " Analisis Pengaruh Image Preprocessing terhadap Akurasi "
-        "Pengenalan Teks Nota Transaksi pada CV Merriena Jaya."
-    )
-    st.write(
-        "MERRI-STOCK merupakan aplikasi pengenalan teks pada nota transaksi CV Merriena Jaya. "
-        "Penelitian ini menganalisis pengaruh image preprocessing terhadap hasil pengenalan "
-        "karakter menggunakan CNN dan Template Matching sebagai pembanding. Hasil pengenalan "
-        "dievaluasi berdasarkan ground truth nota."
+    # 1. Tujuan sistem
+    st.subheader("1. Tujuan Sistem")
+    st.info(
+        "MERRI-STOCK membantu membaca informasi pada nota transaksi secara "
+        "otomatis. Gambar nota yang sebelumnya harus dibaca dan diketik "
+        "manual kini dapat diubah menjadi teks oleh sistem."
     )
 
-    st.subheader("Jumlah dataset karakter")
+    # 2. Cara kerja (diagram alur)
+    st.subheader("2. Cara Kerja")
+    st.markdown(
+        """
+        ```
+        Upload Nota  →  Preprocessing  →  Deteksi Field  →  Segmentasi
+              →  Pengenalan Karakter  →  Hasil Teks
+        ```
+        """
+    )
+
+    tahap = [
+        ("Upload Nota", "Gambar nota dimasukkan ke aplikasi."),
+        ("Preprocessing", "Gambar diperbaiki agar tulisan lebih jelas."),
+        ("Deteksi Field", "Sistem mencari lokasi bagian penting pada nota."),
+        ("Segmentasi", "Teks pada tiap bagian dipisah menjadi per karakter."),
+        ("Pengenalan", "Tiap karakter dikenali menjadi huruf/angka."),
+        ("Hasil Teks", "Karakter disusun kembali menjadi teks utuh."),
+    ]
+
+    for i in range(0, len(tahap), 3):
+        kol = st.columns(3)
+        for j, (nama, ket) in enumerate(tahap[i:i + 3]):
+            with kol[j]:
+                with st.container(border=True):
+                    st.markdown(f"**{i + j + 1}. {nama}**")
+                    st.caption(ket)
+
+    # 3. Data
+    st.subheader("3. Data")
+
     dataset = BASE / "dataset"
     ekstensi = (".png", ".jpg", ".jpeg")
-    total = 0
+    total_gambar = 0
     rincian = {}
     if dataset.exists():
         for jenis in ("huruf", "angka", "simbol"):
@@ -509,22 +649,84 @@ def halaman_preparation():
                     if p.is_file() and p.suffix.lower() in ekstensi
                 ])
                 rincian[jenis] = n
-                total += n
-    kol = st.columns(4)
-    kol[0].metric("Total gambar", total)
-    kol[1].metric("Huruf", rincian.get("huruf", 0))
-    kol[2].metric("Angka", rincian.get("angka", 0))
-    kol[3].metric("Simbol", rincian.get("simbol", 0))
+                total_gambar += n
 
-    st.subheader("Model dan metode")
-    st.write("- Kelas karakter CNN: 70 (26 huruf besar, 26 huruf kecil, 10 angka, 8 simbol).")
-    st.write("- Model: `models/cnn_karakter.keras` ")
-    st.write("- Pembanding: Template Matching (cosine similarity).")
-    st.write("- Image preprocessing dianalisis pengaruhnya terhadap hasil pengenalan karakter.")
-    st.write("- Hasil pengenalan CNN dan Template Matching dievaluasi terhadap ground truth menggunakan Character Error Rate (CER)")
+    jumlah_kelas = 70
+    label_path = BASE / "models" / "labels.json"
+    if label_path.exists():
+        try:
+            import json
+            with open(label_path, encoding="utf-8") as f:
+                jumlah_kelas = len(json.load(f))
+        except Exception:
+            jumlah_kelas = 70
 
-    st.subheader("Lima field target")
-    st.write("Nomor nota, Tanggal, Nama produk, Jumlah, Satuan.")
+    jumlah_nota = 0
+    for folder in (BASE / "data_nota_asli", BASE / "data_uji"):
+        if folder.exists():
+            jumlah_nota += len([
+                p for p in folder.glob("*")
+                if p.is_file() and p.suffix.lower() in ekstensi
+            ])
+
+    a, b = st.columns(2)
+    with a:
+        with st.container(border=True):
+            st.markdown("**Data Nota**")
+            st.metric("Gambar nota", jumlah_nota)
+            st.caption("Nota transaksi CV Merriena Jaya yang dipakai untuk pengujian.")
+    with b:
+        with st.container(border=True):
+            st.markdown("**Dataset Karakter**")
+            st.metric("Total gambar", total_gambar)
+            st.caption(
+                f"Huruf {rincian.get('huruf', 0):,} · "
+                f"Angka {rincian.get('angka', 0):,} · "
+                f"Simbol {rincian.get('simbol', 0):,}"
+            )
+            st.caption(f"Jumlah kelas karakter: {jumlah_kelas}")
+
+    # 4. Metode
+    st.subheader("4. Metode")
+    st.caption("Empat metode berikut bekerja berurutan dalam satu alur.")
+
+    metode = [
+        ("Projection", "Menghitung jumlah piksel tinta per kolom untuk "
+                       "menemukan batas antar karakter."),
+        ("Dynamic Programming", "Memilih kombinasi batas karakter terbaik "
+                                "dari banyak kemungkinan."),
+        ("Template Matching", "Mencocokkan bentuk tiap karakter dengan "
+                              "template pada dataset untuk mengenalinya."),
+        ("CNN", "Model pembelajaran mesin yang mengenali karakter "
+                "berdasarkan pola bentuk yang telah dilatih."),
+    ]
+
+    for i in range(0, len(metode), 2):
+        kol = st.columns(2)
+        for j, (nama, ket) in enumerate(metode[i:i + 2]):
+            with kol[j]:
+                with st.container(border=True):
+                    st.markdown(f"**{nama}**")
+                    st.caption(ket)
+
+    # 5. Informasi yang dibaca
+    st.subheader("5. Informasi yang Dibaca")
+    st.caption("Sistem mengambil lima informasi utama dari nota.")
+
+    field = [
+        ("Nomor Nota", "Nomor urut nota (contoh: 0299)"),
+        ("Tanggal", "Tanggal transaksi"),
+        ("Nama Produk", "Nama barang pada baris transaksi"),
+        ("Jumlah", "Banyaknya barang yang dibeli"),
+        ("Satuan", "Satuan barang (contoh: Pcs, M2, Rit)"),
+    ]
+
+    kol = st.columns(5)
+    for i, (nama, ket) in enumerate(field):
+        with kol[i]:
+            with st.container(border=True):
+                st.markdown(f"**{nama}**")
+                st.caption(ket)
 
 
 GT_CONTOH = {
@@ -538,8 +740,9 @@ GT_CONTOH = {
 def halaman_evaluasi():
     st.header("Evaluasi (CER)")
     st.caption(
-        "Tulis ground truth tiap field. Program langsung membandingkannya "
-        "dengan hasil pengenalan CNN dan Template Matching (CER)."
+        "Tulis ground truth tiap field. Program membandingkan hasil OCR "
+        "(label CNN, dengan Template Matching sebagai pencocok pola) "
+        "dengan ground truth menggunakan CER."
     )
 
     if st.session_state.get("gambar_bgr") is None:
@@ -562,31 +765,21 @@ def halaman_evaluasi():
     for f in det["fields"]:
         h = hasil.get(f["id"], {})
         t = h.get("tanpa", {})
-        c = h.get("clahe", {})
         bawaan = GT_CONTOH.get(nama, "") if f["jenis"] == "nomor" else ""
         gt = st.text_input(
             f"Ground truth — {f['label']}", value=bawaan, key=f"gt_{f['id']}"
         )
-        cnn = t.get("cnn", "")
-        tm = t.get("tm", "")
-        cer_c = hitung_cer(gt, cnn) if gt.strip() else None
-        cer_t = hitung_cer(gt, tm) if gt.strip() else None
+        teks = t.get("teks", "")
+        cer = hitung_cer(gt, teks) if gt.strip() else None
         row = {
             "Field": f["label"],
             "Ground Truth": gt,
-            "CNN": cnn or "—",
-            "CER CNN": None if cer_c is None else round(cer_c, 4),
-            "TM": tm or "—",
-            "CER TM": None if cer_t is None else round(cer_t, 4),
+            "Hasil OCR (label CNN)": teks or "—",
+            "CER": None if cer is None else round(cer, 4),
         }
-        if c.get("cnn") is not None and (c.get("cnn") or c.get("tm")):
-            cc = hitung_cer(gt, c.get("cnn", "")) if gt.strip() else None
-            ct = hitung_cer(gt, c.get("tm", "")) if gt.strip() else None
-            row["CER CNN (CLAHE)"] = None if cc is None else round(cc, 4)
-            row["CER TM (CLAHE)"] = None if ct is None else round(ct, 4)
         baris.append(row)
 
-    st.subheader("Perbandingan per field")
+    st.subheader("Hasil OCR (label CNN) vs ground truth")
     st.dataframe(baris, use_container_width=True, hide_index=True)
 
     st.subheader("Rata-rata CER")
@@ -598,10 +791,7 @@ def halaman_evaluasi():
 
     ringkas = []
     for label, kunci in (
-        ("CNN (tanpa CLAHE)", "CER CNN"),
-        ("Template Matching (tanpa CLAHE)", "CER TM"),
-        ("CNN (dengan CLAHE)", "CER CNN (CLAHE)"),
-        ("Template Matching (dengan CLAHE)", "CER TM (CLAHE)"),
+        ("OCR CNN", "CER"),
     ):
         if any(kunci in r for r in baris):
             nilai, jumlah = rata(kunci)
@@ -617,7 +807,7 @@ st.sidebar.title("MERRI-STOCK")
 st.sidebar.caption("Sistem Pengenalan Teks Nota Transaksi CV Merriena Jaya")
 
 HALAMAN = [
-    "Preparation",
+    "Business Understanding",
     "Upload Nota",
     "Preprocessing",
     "Segmentasi",
@@ -630,8 +820,8 @@ halaman = st.sidebar.radio("Halaman", HALAMAN, key="navigasi")
 if st.session_state.get("nama_file"):
     st.sidebar.info(f"Nota aktif: {st.session_state['nama_file']}")
 
-if halaman == "Preparation":
-    halaman_preparation()
+if halaman == "Business Understanding":
+    halaman_business_understanding()
 elif halaman == "Upload Nota":
     halaman_upload()
 elif halaman == "Preprocessing":

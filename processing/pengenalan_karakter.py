@@ -183,6 +183,81 @@ def bandingkan_metode(gambar):
     }
 
 
+# Aturan penggabungan CNN + Template Matching (satu pipeline OCR).
+# CNN adalah SATU-SATUNYA penentu label karakter. Template Matching
+# hanya mencocokkan pola kandidat dan hasilnya disimpan sebagai
+# informasi pendukung (dukungan/ketidaksepakatan) untuk evaluasi.
+# Ambang dipisah karena skala kedua metode berbeda:
+# pc = probabilitas softmax [0..1], pt = cosine similarity.
+AMBANG_CNN = 0.60
+AMBANG_TM = 0.80
+
+
+def gabung_keputusan(cnn_char, pc, tm_char, pt,
+                     ambang_cnn=AMBANG_CNN, ambang_tm=AMBANG_TM):
+    """
+    Menentukan label final per karakter.
+
+    Label final SELALU berasal dari CNN. Template Matching tidak pernah
+    mengganti label; hasilnya hanya dipakai untuk menandai dukungan pola
+    sehingga dapat dievaluasi.
+
+    Mengembalikan (karakter_final, aturan, dukungan_tm).
+    """
+    if pc >= ambang_cnn:
+        aturan = "cnn_kuat"
+    elif tm_char == cnn_char:
+        aturan = "tm_mendukung"
+    else:
+        aturan = "tm_berbeda"
+
+    # Dukungan pola dari Template Matching (informasi pendukung saja).
+    if tm_char == cnn_char:
+        dukungan = "mendukung"
+    elif pt >= ambang_tm:
+        dukungan = "pola_kuat_beda"
+    else:
+        dukungan = "lemah"
+
+    return cnn_char, aturan, dukungan
+
+
+def gabung_segmen(hasil_segmen, ambang_cnn=AMBANG_CNN, ambang_tm=AMBANG_TM):
+    # Gabungkan prediksi tiap segmen menjadi keputusan akhir + detail.
+    hasil_final = []
+    detail = []
+
+    for s in hasil_segmen:
+        cnn = s.get("cnn", "")
+        tm = s.get("tm", "")
+        pc = float(s.get("pc", 0.0) or 0.0)
+        pt = float(s.get("pt", 0.0) or 0.0)
+
+        final, aturan, dukungan = gabung_keputusan(
+            cnn, pc, tm, pt, ambang_cnn, ambang_tm
+        )
+
+        baru = dict(s)
+        baru["final"] = final
+        baru["aturan"] = aturan
+        baru["dukungan_tm"] = dukungan
+        hasil_final.append(baru)
+
+        detail.append({
+            "x1": s.get("x1"),
+            "x2": s.get("x2"),
+            "cnn": cnn,
+            "pc": round(pc, 4),
+            "tm": tm,
+            "pt": round(pt, 4),
+            "final": final,
+            "aturan": aturan,
+            "dukungan_tm": dukungan,
+        })
+
+    return hasil_final, detail
+
+
 if __name__ == "__main__":
 
     if len(sys.argv) < 2:

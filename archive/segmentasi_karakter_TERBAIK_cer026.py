@@ -1,0 +1,873 @@
+
+from pathlib import Path
+import sys
+import csv
+
+import cv2
+import numpy as np
+
+from processing.dataset_loader import normalisasi_karakter
+from processing.pengenalan_karakter import (
+    muat_cnn,
+    muat_templates
+)
+
+
+SKALA = 3
+
+
+# =========================================
+# BACA DAN SIMPAN GAMBAR
+# =========================================
+
+def baca_gambar(path):
+    data = np.fromfile(str(path), np.uint8)
+    return cv2.imdecode(data, cv2.IMREAD_COLOR)
+
+
+def simpan_gambar(path, gambar):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    ok, data = cv2.imencode(".png", gambar)
+
+    if not ok:
+        raise ValueError(f"Gagal encoding: {path}")
+
+    with open(path, "wb") as f:
+        f.write(data.tobytes())
+
+
+# =========================================
+# PREPROCESSING
+# =========================================
+
+def binarisasi(gambar):
+    abu = cv2.cvtColor(
+        gambar, cv2.COLOR_BGR2GRAY
+    )
+
+    abu = cv2.resize(
+        abu,
+        None,
+        fx=SKALA,
+        fy=SKALA,
+        interpolation=cv2.INTER_CUBIC
+    )
+
+    abu = cv2.GaussianBlur(
+        abu, (3, 3), 0
+    )
+
+    _, biner = cv2.threshold(
+        abu, 0, 255,
+        cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
+    )
+
+    return biner
+
+
+# =========================================
+# DETEKSI KOMPONEN
+# =========================================
+
+def deteksi_komponen(biner):
+    n, _, stats, _ = (
+        cv2.connectedComponentsWithStats(
+            biner,
+            connectivity=8
+        )
+    )
+
+    hasil = []
+
+    for x, y, w, h, area in stats[1:]:
+        if area >= 12 and h >= 4 and w >= 2:
+            hasil.append((
+                int(x), int(y),
+                int(w), int(h)
+            ))
+
+    return sorted(
+        hasil,
+        key=lambda z: (z[0], z[1])
+    )
+
+
+# =========================================
+# NORMALISASI KANDIDAT KARAKTER
+# =========================================
+
+def normalisasi_potongan(biner):
+    titik = cv2.findNonZero(biner)
+
+    if titik is None:
+        return None
+
+    x, y, w, h = cv2.boundingRect(titik)
+
+    if w < 2 or h < 3:
+        return None
+
+    putih = cv2.bitwise_not(
+        biner[y:y+h, x:x+w]
+    )
+
+    return normalisasi_karakter(putih)
+
+
+# =========================================
+# MENCARI BEBERAPA CALON BATAS
+# =========================================
+
+def calon_batas(blob, tinggi_acuan):
+    h, w = blob.shape
+
+    proyeksi = np.count_nonzero(
+        blob, axis=0
+    ).astype(np.float32)
+
+    halus = np.convolve(
+        proyeksi,
+        np.ones(3) / 3,
+        mode="same"
+    )
+
+    batas = {0, w}
+
+    # 1) Kolom tanpa tinta = celah pasti antar karakter. Titik tengah
+    #    setiap celah dijadikan batas agar huruf terpisah tidak menyatu.
+    kolom_kosong = proyeksi == 0
+    i = 0
+    while i < w:
+        if kolom_kosong[i]:
+            j = i
+            while j < w and kolom_kosong[j]:
+                j += 1
+            if (j - i) >= 2:
+                batas.add((i + j) // 2)
+            i = j
+        else:
+            i += 1
+
+    # 2) Lembah proyeksi lokal untuk huruf yang benar-benar menempel.
+    ambang = np.percentile(halus, 30)
+    for p in range(1, w - 1):
+        if (
+            halus[p] <= halus[p - 1]
+            and halus[p] <= halus[p + 1]
+            and halus[p] <= ambang
+        ):
+            batas.add(p)
+
+    # 3) Grid tetap sebagai cadangan pilihan DP.
+    langkah = max(3, round(tinggi_acuan * 0.12))
+    for p in range(langkah, w, langkah):
+        batas.add(p)
+
+    return sorted(batas)
+
+
+# =========================================
+# PENILAIAN CNN DAN TEMPLATE MATCHING
+# =========================================
+
+def skor_potongan(
+    blob,
+    batas,
+    tinggi_acuan,
+    model,
+    labels,
+    templates,
+    label_tm,
+    penalti=0.55
+):
+    pasangan = []
+    array = []
+
+    min_w = max(
+        2,
+        int(0.10 * tinggi_acuan)
+    )
+
+    max_w = max(
+        min_w + 1,
+        int(0.95 * tinggi_acuan)
+    )
+
+    for i in range(len(batas) - 1):
+
+        for j in range(i + 1, len(batas)):
+            lebar = batas[j] - batas[i]
+
+            if lebar > max_w:
+                break
+
+            if lebar < min_w:
+                continue
+
+            pot = normalisasi_potongan(
+                blob[:, batas[i]:batas[j]]
+            )
+
+            if pot is not None:
+                pasangan.append((i, j))
+                array.append(pot)
+
+    if not array:
+        return {}
+
+    # CNN
+    X = np.asarray(
+        array,
+        dtype=np.float32
+    )[..., None] / 255.0
+
+    prob = model.predict(
+        X,
+        batch_size=128,
+        verbose=0
+    )
+
+    # Template Matching
+    V = X[..., 0].reshape(
+        len(X), -1
+    )
+
+    V = V / np.maximum(
+        np.linalg.norm(
+            V,
+            axis=1,
+            keepdims=True
+        ),
+        1e-8
+    )
+
+    similarity = V @ templates.T
+
+    skor = {}
+
+    for row, (i, j) in enumerate(pasangan):
+        c = int(np.argmax(prob[row]))
+        t = int(np.argmax(similarity[row]))
+
+        pc = float(prob[row, c])
+        pt = float(similarity[row, t])
+
+        panjang = batas[j] - batas[i]
+
+        # Skor pemilihan kandidat.
+        # Ini bukan nilai akurasi OCR.
+        nilai = (
+            0.65 * np.log(max(pc, 1e-6))
+            + 0.35 * np.log(max(pt, 1e-6))
+            - 0.22 * abs(
+                np.log(
+                    max(panjang, 1)
+                    / max(
+                        tinggi_acuan * 0.55,
+                        1
+                    )
+                )
+            )
+            - penalti
+        )
+
+        # Penalti tambahan bila potongan jauh lebih lebar dari satu karakter.
+        if panjang > 0.85 * tinggi_acuan:
+            nilai -= 0.8 * (panjang / max(tinggi_acuan, 1) - 0.85)
+
+        # Bonus kecil jika prediksi sama.
+        if labels[c] == label_tm[t]:
+            nilai += 0.12
+
+        skor[(i, j)] = (
+            nilai,
+            labels[c],
+            label_tm[t],
+            pc,
+            pt
+        )
+
+    return skor
+
+
+# =========================================
+# MEMILIH KOMBINASI PEMOTONGAN
+# =========================================
+
+def pilih_batas(batas, skor):
+    n = len(batas)
+
+    dp = [-np.inf] * n
+    prev = [None] * n
+
+    dp[0] = 0.0
+
+    # Dynamic programming
+    for j in range(1, n):
+        for i in range(j):
+
+            if (
+                (i, j) in skor
+                and np.isfinite(dp[i])
+            ):
+                val = (
+                    dp[i]
+                    + skor[(i, j)][0]
+                )
+
+                if val > dp[j]:
+                    dp[j] = val
+                    prev[j] = i
+
+    if prev[-1] is None:
+        return []
+
+    hasil = []
+    j = n - 1
+
+    while j > 0:
+        i = prev[j]
+
+        if i is None:
+            return []
+
+        hasil.append((
+            batas[i],
+            batas[j],
+            skor[(i, j)]
+        ))
+
+        j = i
+
+    return list(reversed(hasil))
+
+
+# =========================================
+# SEGMENTASI UTAMA
+# =========================================
+
+def _prediksi_potongan(blob_kolom, model, labels, templates, label_tm):
+    # Prediksi satu potongan (CNN + Template Matching).
+    pot = normalisasi_potongan(blob_kolom)
+    if pot is None:
+        return None
+    X = pot.astype(np.float32).reshape(1, 32, 32, 1) / 255.0
+    prob = model.predict(X, verbose=0)[0]
+    c = int(np.argmax(prob))
+    pc = float(prob[c])
+    V = X.reshape(1, -1)
+    V = V / np.maximum(np.linalg.norm(V, axis=1, keepdims=True), 1e-8)
+    sim = V @ templates.T
+    t = int(np.argmax(sim[0]))
+    pt = float(sim[0, t])
+    return labels[c], label_tm[t], pc, pt
+
+
+def _pecah_lebar(blob, a, b, char_w, model, labels, templates, label_tm,
+                 kedalaman=0):
+    """
+    Pecah segmen [a..b] yang jauh lebih lebar dari satu karakter.
+
+    Dipotong rekursif di lembah tinta terdekat titik tengah, sehingga
+    huruf yang menempel tetap terpisah. Tiap potongan diprediksi ulang
+    agar label tetap sesuai isinya.
+    """
+    lebar = b - a
+    if lebar <= 1.45 * char_w or kedalaman >= 3:
+        pr = _prediksi_potongan(blob[:, a:b], model, labels, templates, label_tm)
+        if pr is None:
+            return []
+        c, t, pc, pt = pr
+        return [(a, b, ("split", c, t, pc, pt))]
+
+    proyeksi = np.count_nonzero(blob[:, a:b], axis=0).astype(np.float32)
+    tengah = lebar // 2
+    lo = max(1, tengah - int(0.4 * char_w))
+    hi = min(lebar - 1, tengah + int(0.4 * char_w))
+    pos = tengah if hi <= lo else lo + int(np.argmin(proyeksi[lo:hi]))
+
+    kiri = _pecah_lebar(blob, a, a + pos, char_w,
+                        model, labels, templates, label_tm, kedalaman + 1)
+    kanan = _pecah_lebar(blob, a + pos, b, char_w,
+                         model, labels, templates, label_tm, kedalaman + 1)
+    return kiri + kanan
+
+
+def segmentasi_karakter_tm(gambar, model, labels, templates, label_tm):
+    """
+    Alur utama sesuai metode penelitian:
+    Template Matching menentukan posisi/pola karakter, lalu CNN
+    mengklasifikasikan setiap kandidat yang ditemukan.
+
+    Koordinat keluaran memakai ruang upsampled (SKALA) agar sama dengan
+    segmentasi_karakter sehingga pemanggil tidak perlu diubah.
+    """
+    from processing.lokalisasi_template import cari_kandidat_karakter
+
+    biner = binarisasi(gambar)
+    kandidat = cari_kandidat_karakter(gambar)
+    if not kandidat:
+        return biner, []
+
+    hasil = []
+    for k in kandidat:
+        x1 = int(k["x1"] * SKALA)
+        y1 = int(k["y1"] * SKALA)
+        x2 = int(k["x2"] * SKALA)
+        y2 = int(k["y2"] * SKALA)
+
+        y1 = max(0, min(biner.shape[0] - 2, y1))
+        y2 = max(y1 + 2, min(biner.shape[0], y2))
+        x1 = max(0, min(biner.shape[1] - 2, x1))
+        x2 = max(x1 + 2, min(biner.shape[1], x2))
+
+        potongan = biner[y1:y2, x1:x2]
+        pr = _prediksi_potongan(potongan, model, labels, templates, label_tm)
+        if pr is None:
+            continue
+        c, t, pc, pt = pr
+
+        hasil.append({
+            "x1": x1,
+            "y1": y1,
+            "x2": x2,
+            "y2": y2,
+            "cnn": c,
+            "tm": k.get("template", t),
+            "pc": pc,
+            "pt": float(k.get("skor", pt)),
+            "status": "KANDIDAT",
+        })
+
+    hasil.sort(key=lambda z: (z["x1"], z["y1"]))
+    return biner, hasil
+
+
+def segmentasi_utama(gambar, model=None, labels=None, templates=None,
+                     label_tm=None, utamakan_tm=False):
+    """
+    Menjalankan pipeline pengenalan karakter.
+
+    - utamakan_tm=False (default): segmentasi proyeksi + DP, lalu CNN.
+      Ini jalur yang terbukti stabil pada data nota proyek ini.
+    - utamakan_tm=True: Template Matching menentukan posisi/pola lebih
+      dahulu, lalu CNN mengklasifikasi. Disediakan untuk eksperimen
+      metode; pada pengujian, hasilnya masih di bawah jalur proyeksi.
+
+    Mengembalikan (biner, hasil, metode).
+    """
+    if model is None:
+        model, labels = muat_cnn()
+    if templates is None:
+        templates, label_tm = muat_templates()
+
+    if utamakan_tm:
+        biner, hasil = segmentasi_karakter_tm(
+            gambar, model, labels, templates, label_tm
+        )
+        if len(hasil) >= 3:
+            return biner, hasil, "template_matching"
+
+    biner, hasil = segmentasi_karakter(
+        gambar, model, labels, templates, label_tm
+    )
+    return biner, hasil, "proyeksi"
+
+
+def segmentasi_karakter(
+    gambar,
+    model=None,
+    labels=None,
+    templates=None,
+    label_tm=None
+):
+    if model is None:
+        model, labels = muat_cnn()
+
+    if templates is None:
+        templates, label_tm = muat_templates()
+
+    biner = binarisasi(gambar)
+    komponen = deteksi_komponen(biner)
+
+    if not komponen:
+        return biner, []
+
+    tinggi = [
+        h for _, _, _, h in komponen
+    ]
+
+    h_max = max(tinggi)
+
+    tinggi_acuan = float(
+        np.median([
+            h for h in tinggi
+            if h >= h_max * 0.45
+        ])
+    )
+
+    # Buang noise yang berada di luar pita vertikal baris teks.
+    pusat = [
+        y + h / 2 for _, y, _, h in komponen
+        if h >= 0.5 * tinggi_acuan
+    ]
+    if pusat:
+        cy_med = float(np.median(pusat))
+        komponen = [
+            k for k in komponen
+            if (cy_med - 0.75 * tinggi_acuan)
+            <= (k[1] + k[3] / 2)
+            <= (cy_med + 0.75 * tinggi_acuan)
+        ]
+
+    # Buang minus pembuka daftar: hanya komponen paling kiri yang pipih
+    # dan lebar. Minus di dalam kode produk (mis. K-300) tidak tersentuh
+    # karena bukan komponen paling kiri.
+    if komponen:
+        kiri = min(komponen, key=lambda k: k[0])
+        _, _, w_kiri, h_kiri = kiri
+        if (
+            h_kiri <= 0.45 * tinggi_acuan
+            and 1.3 * h_kiri <= w_kiri <= 1.4 * tinggi_acuan
+        ):
+            komponen = [k for k in komponen if k != kiri]
+
+    if not komponen:
+        return biner, []
+
+    # Estimasi lebar satu karakter untuk memecah segmen yang terlalu lebar.
+    lebar_satu = [
+        w0 for (_, _, w0, h0) in komponen
+        if h0 >= 0.55 * tinggi_acuan
+        and 0.15 * tinggi_acuan <= w0 <= 1.10 * tinggi_acuan
+    ]
+    if len(lebar_satu) >= 3:
+        char_w_est = float(np.median(lebar_satu))
+    else:
+        char_w_est = 0.55 * tinggi_acuan
+
+    hasil = []
+
+    for x, y, w, h in komponen:
+        blob = biner[
+            y:y+h,
+            x:x+w
+        ]
+        # Hanya komponen lebar yang
+        # dicoba dipisahkan lebih lanjut.
+        is_lebar = (
+            w > 1.25 * tinggi_acuan
+            and h > 0.40 * tinggi_acuan
+        )
+
+        if is_lebar:
+            batas = calon_batas(
+                blob,
+                tinggi_acuan
+            )
+        else:
+            batas = [0, w]
+
+        # Objek yang jauh lebih lebar dari satu karakter pasti berisi
+        # beberapa karakter, jadi penalti per-karakter diturunkan agar
+        # DP cenderung memisahkan (bukan menggabung).
+        rasio_lebar = w / max(tinggi_acuan, 1.0)
+        if rasio_lebar > 1.5:
+            penalti_blob = 0.15
+        elif rasio_lebar > 1.2:
+            penalti_blob = 0.35
+        else:
+            penalti_blob = 0.55
+
+        nilai = skor_potongan(
+            blob,
+            batas,
+            tinggi_acuan,
+            model,
+            labels,
+            templates,
+            label_tm,
+            penalti=penalti_blob
+        )
+
+        potong = pilih_batas(
+            batas,
+            nilai
+        )
+
+        if not potong:
+            hasil.append({
+                "x1": x,
+                "y1": y,
+                "x2": x+w,
+                "y2": y+h,
+                "cnn": "?",
+                "tm": "?",
+                "pc": 0.0,
+                "pt": 0.0,
+                "status": "BELUM_TERURAI"
+            })
+            continue
+
+        for a, b, info in potong:
+            # Pecah lagi hanya bila segmen memang cukup lebar untuk memuat
+            # lebih dari satu karakter. Syarat tinggi menjaga agar huruf
+            # tunggal lebar (mis. 'P', 'M') tidak ikut terpecah.
+            lebar_seg = b - a
+            cukup_lebar = (
+                lebar_seg > 1.45 * char_w_est
+                and lebar_seg > 1.15 * tinggi_acuan
+            )
+
+            if cukup_lebar:
+                bagian = _pecah_lebar(
+                    blob, a, b, char_w_est,
+                    model, labels, templates, label_tm
+                )
+            else:
+                bagian = [(a, b, info)]
+
+            for aa, bb, info2 in bagian:
+                _, c, t, pc, pt = info2
+                hasil.append({
+                    "x1": x + aa,
+                    "y1": y,
+                    "x2": x + bb,
+                    "y2": y + h,
+                    "cnn": c,
+                    "tm": t,
+                    "pc": pc,
+                    "pt": pt,
+                    "status": "KANDIDAT"
+                })
+
+    return biner, sorted(
+        hasil,
+        key=lambda z: (
+            z["x1"],
+            z["y1"]
+        )
+    )
+
+
+# =========================================
+# MENYUSUN HASIL MENJADI TEKS
+# =========================================
+
+def susun_teks(
+    hasil,
+    metode,
+    tinggi_acuan
+):
+    teks = ""
+    akhir = None
+
+    # Hitung ulang tinggi acuan dari data segmen agar konsisten, dan ukur
+    # celah antarkarakter untuk mendeteksi spasi antarkata.
+    if hasil:
+        tinggi_seg = np.median([max(1, s["y2"] - s["y1"]) for s in hasil])
+        tinggi_acuan = float(tinggi_seg)
+    if tinggi_acuan <= 0:
+        tinggi_acuan = 12.0
+
+    celah = []
+    for i in range(1, len(hasil)):
+        celah.append(hasil[i]["x1"] - hasil[i - 1]["x2"])
+
+    # Ambang spasi adaptif: celah jauh lebih besar dari celah antarkarakter
+    # biasa (median) sekaligus cukup besar terhadap tinggi teks.
+    if celah:
+        celah_med = float(np.median(celah))
+        ambang_spasi = max(
+            0.22 * tinggi_acuan,
+            celah_med + 0.25 * tinggi_acuan,
+        )
+    else:
+        ambang_spasi = 0.30 * tinggi_acuan
+
+    for i, item in enumerate(hasil):
+        if i > 0:
+            gap = item["x1"] - hasil[i - 1]["x2"]
+            if gap > ambang_spasi:
+                teks += " "
+
+        teks += item[metode]
+        akhir = max(item["x2"], akhir or 0)
+
+    return teks
+
+
+# =========================================
+# PENGUJIAN DAN PENYIMPANAN
+# =========================================
+
+def proses(path_gambar):
+    path = Path(path_gambar)
+
+    gambar = baca_gambar(path)
+
+    if gambar is None:
+        raise ValueError(
+            f"Gambar tidak dapat dibaca: {path}"
+        )
+
+    output = path.parent / (
+        "segmentasi_" + path.stem
+    )
+
+    output.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    print(
+        "Memuat CNN dan Template Matching..."
+    )
+
+    model, labels = muat_cnn()
+    templates, label_tm = muat_templates()
+
+    biner, hasil = segmentasi_karakter(
+        gambar,
+        model,
+        labels,
+        templates,
+        label_tm
+    )
+
+    visual = cv2.resize(
+        gambar,
+        (
+            biner.shape[1],
+            biner.shape[0]
+        ),
+        interpolation=cv2.INTER_CUBIC
+    )
+
+    tinggi = [
+        s["y2"] - s["y1"]
+        for s in hasil
+    ]
+
+    tinggi_acuan = (
+        float(np.median(tinggi))
+        if tinggi else 12.0
+    )
+
+    daftar = []
+
+    for no, item in enumerate(hasil, 1):
+
+        x1, y1, x2, y2 = (
+            item[k] for k in (
+                "x1", "y1", "x2", "y2"
+            )
+        )
+
+        if item["status"] == "KANDIDAT":
+            warna = (0, 160, 0)
+        else:
+            warna = (0, 0, 255)
+
+        cv2.rectangle(
+            visual,
+            (x1, y1),
+            (x2, y2),
+            warna,
+            1
+        )
+
+        crop = cv2.bitwise_not(
+            biner[y1:y2, x1:x2]
+        )
+
+        simpan_gambar(
+            output / "potongan"
+            / f"segmen_{no:03d}.png",
+            crop
+        )
+
+        daftar.append({
+            "nomor": no,
+            **item
+        })
+
+    simpan_gambar(
+        output / "biner.png",
+        biner
+    )
+
+    simpan_gambar(
+        output / "hasil_segmentasi.png",
+        visual
+    )
+
+    with open(
+        output / "hasil_prediksi.csv",
+        "w",
+        encoding="utf-8-sig",
+        newline=""
+    ) as f:
+
+        kolom = [
+            "nomor",
+            "x1", "y1",
+            "x2", "y2",
+            "cnn", "tm",
+            "pc", "pt",
+            "status"
+        ]
+
+        penulis = csv.DictWriter(
+            f,
+            fieldnames=kolom
+        )
+
+        penulis.writeheader()
+        penulis.writerows(daftar)
+
+    teks_cnn = susun_teks(
+        hasil,
+        "cnn",
+        tinggi_acuan
+    )
+
+    teks_tm = susun_teks(
+        hasil,
+        "tm",
+        tinggi_acuan
+    )
+
+    with open(
+        output / "hasil_teks.txt",
+        "w",
+        encoding="utf-8"
+    ) as f:
+        f.write(
+            f"CNN: {teks_cnn}\n"
+            f"Template Matching: {teks_tm}\n"
+        )
+
+    print("\n=== HASIL OCR EKSPERIMEN ===")
+    print("Jumlah kandidat:", len(hasil))
+    print("CNN:", teks_cnn)
+    print("Template Matching:", teks_tm)
+    print("Output:", output)
+
+    print(
+        "\nPERINGATAN: Hasil masih perlu "
+        "dibandingkan dengan ground truth."
+    )
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        sys.exit(
+            'Gunakan: python -m '
+            'processing.segmentasi_karakter '
+            '"path_crop.png"'
+        )
+
+    proses(sys.argv[1])
