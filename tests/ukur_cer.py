@@ -42,7 +42,9 @@ def main():
             if crop is None or not getattr(crop, "size", 0):
                 pred = ""
             else:
-                pred = app.kenali_crop(crop, pakai_clahe=False)["teks"]
+                pred = app.kenali_crop(
+                    crop, pakai_clahe=False, jenis=f.get("jenis")
+                )["teks"]
 
             cer = app.hitung_cer(gt, pred)
             total += 1

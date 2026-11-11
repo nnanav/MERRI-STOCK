@@ -8,9 +8,9 @@ import random
 import cv2
 import numpy as np
 
-BASE = Path(__file__).resolve().parent
+BASE = Path(__file__).resolve().parent.parent
 DATASET = BASE / "dataset"
-LAPORAN = BASE / "laporan_dataset"
+LAPORAN = BASE / "output" / "laporan_dataset"
 
 EKSTENSI = {".png", ".jpg", ".jpeg"}
 SEED = 42

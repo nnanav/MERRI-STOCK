@@ -74,8 +74,11 @@ Hasil pelatihan disimpan ke `models/cnn_karakter.keras` dan `models/labels.json`
 
 ```powershell
 python tests/uji_app_streamlit.py     # cek 6 halaman dashboard
+python tests/uji_info_dataset.py      # cek konsistensi angka data latih
 python tests/uji_integrasi_segmen.py  # cek alur upload sampai evaluasi
 python tests/ukur_cer.py              # ukur CER terhadap ground truth
+python tests/sapu_ambang.py           # bandingkan ambang lebar komponen
+python tests/diag_segmen.py           # rincian segmen per field
 ```
 
 ## Catatan

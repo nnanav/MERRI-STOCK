@@ -36,8 +36,11 @@ GT = {
     ("nota_52", "nomor"): "0299",
     ("nota_52", "penerima"): "Bpk Indra Hadiyanto",
     ("nota_52", "proyek"): "KSO Adhi PG Traning Center PSSI IKN",
-    ("nota_52", "jumlah_1"): "3.400",
-    ("nota_52", "jumlah_2"): "3.800",
+    # Nota_52 menulis jumlah tanpa pemisah ribuan pada baris 1 ("400")
+    # dan memakai koma pada baris 2 ("3,800"); dikonfirmasi lewat
+    # pembacaan ulang gambar asli 1600 px.
+    ("nota_52", "jumlah_1"): "400",
+    ("nota_52", "jumlah_2"): "3,800",
     ("nota_52", "harga_1"): "35,696",
     ("nota_52", "harga_2"): "20,240",
     ("nota_52", "satuan_1"): "Pcs",

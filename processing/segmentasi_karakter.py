@@ -15,6 +15,14 @@ from processing.pengenalan_karakter import (
 
 SKALA = 3
 
+# Ambang lebar komponen (relatif terhadap tinggi huruf) yang dianggap
+# memuat lebih dari satu karakter sehingga perlu dicoba dipisah.
+# Batas 1.25 terlalu longgar: huruf yang saling menempel seperti "va",
+# "ln", atau "GI" lebarnya hanya ~1.1-1.2 x tinggi huruf, sehingga
+# lolos dari pemisahan dan keluar sebagai satu kotak bertanda '?'.
+# Nilai 1.10 dipilih dari pengujian: CER terbaik pada rentang 1.08-1.12.
+AMBANG_LEBAR_KOMPONEN = 1.10
+
 
 # =========================================
 # BACA DAN SIMPAN GAMBAR
@@ -558,7 +566,7 @@ def segmentasi_karakter(
         # Hanya komponen lebar yang
         # dicoba dipisahkan lebih lanjut.
         is_lebar = (
-            w > 1.25 * tinggi_acuan
+            w > AMBANG_LEBAR_KOMPONEN * tinggi_acuan
             and h > 0.40 * tinggi_acuan
         )
 
@@ -598,16 +606,43 @@ def segmentasi_karakter(
         )
 
         if not potong:
+            # DP tidak menemukan satu pun kandidat valid. Penyebab yang
+            # paling sering: lebar komponen sedikit melebihi batas lebar
+            # satu karakter (0.95 x tinggi acuan), sehingga seluruh
+            # komponen tidak pernah ikut dipertimbangkan. Contohnya huruf
+            # 'P' pada "Pcs" yang lebarnya ~1.0 x tinggi huruf.
+            # Daripada menandai segmen '?' tanpa label, komponen utuh
+            # diklasifikasikan sekali agar tetap ada prediksi.
+            utuh = _prediksi_potongan(
+                blob, model, labels, templates, label_tm
+            )
+
+            if utuh is None:
+                hasil.append({
+                    "x1": x,
+                    "y1": y,
+                    "x2": x+w,
+                    "y2": y+h,
+                    "cnn": "?",
+                    "tm": "?",
+                    "pc": 0.0,
+                    "pt": 0.0,
+                    "status": "BELUM_TERURAI"
+                })
+                continue
+
+            c_utuh, t_utuh, pc_utuh, pt_utuh = utuh
+
             hasil.append({
                 "x1": x,
                 "y1": y,
                 "x2": x+w,
                 "y2": y+h,
-                "cnn": "?",
-                "tm": "?",
-                "pc": 0.0,
-                "pt": 0.0,
-                "status": "BELUM_TERURAI"
+                "cnn": c_utuh,
+                "tm": t_utuh,
+                "pc": pc_utuh,
+                "pt": pt_utuh,
+                "status": "KANDIDAT"
             })
             continue
 
@@ -684,8 +719,22 @@ def rapikan_segmen(hasil, tinggi_acuan):
 
     buang = {":", "=", "~", "_", "|"}
 
+    # Tanda yang memang kecil secara wajar, jadi tidak boleh dibuang
+    # walaupun ukurannya jauh di bawah tinggi huruf.
+    kecil_sah = {".", ",", "'", "`", "-", '"'}
+
     def pengganggu(item):
-        return item.get("cnn", "") in buang
+        label = item.get("cnn", "")
+        if label in buang:
+            return True
+
+        # Serpihan sangat pendek di tepi (mis. sisa garis tabel atau
+        # potongan huruf tetangga) bukan bagian isi field.
+        tinggi_item = item.get("y2", 0) - item.get("y1", 0)
+        return (
+            label not in kecil_sah
+            and tinggi_item < 0.45 * tinggi_acuan
+        )
 
     while len(hasil) > 2 and pengganggu(hasil[0]):
         hasil = hasil[1:]

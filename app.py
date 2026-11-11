@@ -109,7 +109,35 @@ def bersihkan_tepi(teks):
     return teks.strip()
 
 
-def kenali_crop(crop, pakai_clahe=False):
+def buang_tanda_kali(hasil):
+    """
+    Buang tanda kali di ujung segmen satuan.
+
+    Pada nota, kolom satuan diikuti tanda kali (mis. "Pcs x"). Tanda itu
+    bukan bagian isi satuan, jadi kotak dan teksnya tidak perlu diikutkan.
+    """
+    if not hasil:
+        return hasil
+    if str(hasil[-1].get("cnn", "")).strip() in {"x", "X", "*", "×"}:
+        return hasil[:-1]
+    return hasil
+
+
+def rapikan_satuan(teks):
+    """
+    Buang tanda kali di akhir satuan.
+
+    Pada nota, kolom satuan diikuti tanda kali, sehingga hasil OCR sering
+    menjadi "Pcs x" padahal isi satuannya hanya "Pcs".
+    """
+    if not teks:
+        return teks
+    import re
+    teks = re.sub(r"[\s.,]*[xX×\*]+\s*$", "", teks)
+    return teks.strip()
+
+
+def kenali_crop(crop, pakai_clahe=False, jenis=None):
     # Satu pipeline OCR: TM menemukan posisi karakter, CNN mengklasifikasi.
     from processing.segmentasi_karakter import segmentasi_utama, susun_teks
     from processing.pengenalan_karakter import gabung_segmen
@@ -123,11 +151,16 @@ def kenali_crop(crop, pakai_clahe=False):
     biner, hasil, metode = segmentasi_utama(
         img, model, labels, templates, label_tm
     )
+    if jenis == "satuan":
+        hasil = buang_tanda_kali(hasil)
     tinggi = [s["y2"] - s["y1"] for s in hasil]
     ta = float(np.median(tinggi)) if tinggi else 12.0
     hasil_final, detail = gabung_segmen(hasil)
+    teks = bersihkan_tepi(susun_teks(hasil_final, "final", ta))
+    if jenis == "satuan":
+        teks = rapikan_satuan(teks)
     return {
-        "teks": bersihkan_tepi(susun_teks(hasil_final, "final", ta)),
+        "teks": teks,
         "cnn": susun_teks(hasil, "cnn", ta),
         "tm": susun_teks(hasil, "tm", ta),
         "n": len(hasil),
@@ -183,6 +216,51 @@ def jalankan_deteksi(gambar_bgr):
     kecil, biner, visual, kotak = deteksi_baris(gambar_bgr)
     H, W = kecil.shape[:2]
 
+    # Crop untuk OCR diambil dari gambar asli, bukan dari gambar proses
+    # yang sudah diperkecil ke 1400 px. Pada nota proyek ini tinggi huruf
+    # baris transaksi hanya ~11 px di ruang proses, sehingga detail seperti
+    # titik pada "10.550" hilang bila crop diambil dari gambar kecil.
+    # Kotak field tetap dihitung di ruang proses agar visualisasi konsisten.
+    if gambar_bgr is not None and gambar_bgr.shape[1] > W:
+        sumber_ocr = gambar_bgr
+        skala_ocr = gambar_bgr.shape[1] / float(W)
+    else:
+        sumber_ocr = kecil
+        skala_ocr = 1.0
+
+    def potong_ocr(kotak, margin=0):
+        # Potong kotak ruang proses dari sumber resolusi asli.
+        if kotak is None:
+            return None
+        Hs, Ws = sumber_ocr.shape[:2]
+        x1 = max(0, int(round(int(kotak["x1"]) * skala_ocr)) - margin)
+        y1 = max(0, int(round(int(kotak["y1"]) * skala_ocr)) - margin)
+        x2 = min(Ws, int(round(int(kotak["x2"]) * skala_ocr)) + margin)
+        y2 = min(Hs, int(round(int(kotak["y2"]) * skala_ocr)) + margin)
+        if x2 <= x1 or y2 <= y1:
+            return None
+        return sumber_ocr[y1:y2, x1:x2].copy()
+
+    def lebar_ke_proses(lebar_piksel):
+        # Kembalikan lebar crop (piksel asli) ke ruang proses.
+        return int(round(lebar_piksel / skala_ocr))
+
+    def crop_field(kotak, jenis):
+        """
+        Potong field sesuai karakter isinya.
+
+        Field harga berisi angka dengan titik ribuan yang hanya setebal
+        ~1 px di ruang proses, sehingga mudah hilang saat gambar diperkecil
+        ke 1400 px. Field harga karena itu dipotong dari gambar asli.
+        Field teks (penerima, proyek, produk, satuan) tetap dipotong dari
+        gambar proses karena segmentasinya lebih stabil di ukuran itu.
+        """
+        if kotak is None:
+            return None
+        if jenis == "harga":
+            return potong_ocr(kotak)
+        return potong(kecil, kotak)
+
     kandidat = [{
         "x1": int(x1), "y1": int(y1), "x2": int(x2), "y2": int(y2),
         "cx": (x1 + x2) / 2, "cy": (y1 + y2) / 2,
@@ -209,7 +287,7 @@ def jalankan_deteksi(gambar_bgr):
     })
 
     def field_dari_kotak(fid, label, jenis, kotak):
-        crop = potong(kecil, kotak) if kotak is not None else None
+        crop = crop_field(kotak, jenis)
         if crop is not None and jenis == "harga":
             crop = pangkas_hingga_rp(crop)
         elif crop is not None and jenis in ("penerima", "proyek"):
@@ -218,7 +296,12 @@ def jalankan_deteksi(gambar_bgr):
         bbox = None
         if kotak is not None:
             lebar_asli = int(kotak["x2"]) - int(kotak["x1"])
-            lebar_crop = crop.shape[1] if crop is not None else lebar_asli
+            lebar_crop = lebar_asli
+            if crop is not None:
+                lebar_crop = crop.shape[1]
+                if jenis == "harga":
+                    # Crop harga berasal dari gambar asli.
+                    lebar_crop = lebar_ke_proses(lebar_crop)
             bbox = (int(kotak["x1"]), int(kotak["y1"]),
                     int(kotak["x1"]) + int(lebar_crop), int(kotak["y2"]))
         return {
@@ -233,7 +316,7 @@ def jalankan_deteksi(gambar_bgr):
     fields.append(field_dari_kotak("proyek", "Proyek", "proyek", proyek))
 
     for i, p in enumerate(produk, 1):
-        crop = potong(kecil, p)
+        crop = crop_field(p, "produk")
         bersih = bersihkan_minus(crop) if crop is not None else None
         crop_produk = bersih["crop"] if bersih else None
 
@@ -245,7 +328,7 @@ def jalankan_deteksi(gambar_bgr):
         if kj is not None:
             # Perluas ke kiri agar token jumlah yang terpotong ikut masuk.
             kj = perluas_kotak_kiri(kecil, kj, batas_kiri=p["x2"] + 2)
-            cjs = potong(kecil, kj)
+            cjs = crop_field(kj, "jumlah")
             if cjs is not None:
                 pisah = pisah_jumlah_satuan(cjs)
                 crop_j = pisah.get("jumlah")
@@ -318,7 +401,7 @@ def ambil_deteksi():
     return st.session_state.get("deteksi")
 
 
-def segmen_field(crop):
+def segmen_field(crop, jenis=None):
     # Segmentasi per karakter memakai pipeline sebenarnya (CNN+Template
     # Matching + dynamic programming), agar kotak yang ditampilkan sama
     # dengan yang dipakai pengenalan. Fallback ke proyeksi bila gagal.
@@ -335,10 +418,14 @@ def segmen_field(crop):
         biner, hasil, metode = segmentasi_utama(
             cimg, model, labels, templates, label_tm
         )
+        if jenis == "satuan":
+            hasil = buang_tanda_kali(hasil)
         final, detail = gabung_segmen(hasil)
         tinggi = [s["y2"] - s["y1"] for s in hasil]
         ta = float(np.median(tinggi)) if tinggi else 12.0
         teks = susun_teks(final, "final", ta) if final else ""
+        if jenis == "satuan":
+            teks = rapikan_satuan(teks)
 
         # Koordinat hasil berada di ruang upsampled (SKALA x); kembalikan
         # ke ukuran crop asli agar kotak pas.
@@ -476,7 +563,9 @@ def halaman_segmentasi():
                 st.warning("Crop field ini tidak tersedia.")
                 continue
 
-            vis, karakter, biner, teks, _detail = segmen_field(crop)
+            vis, karakter, biner, teks, _detail = segmen_field(
+                crop, f.get("jenis")
+            )
 
             kiri, kanan = st.columns(2)
             kiri.caption("Crop asli")
@@ -505,9 +594,9 @@ def halaman_segmentasi():
                             kol[i].caption(k["final"])
 
 
-def kenali_satu(crop, pakai_clahe):
+def kenali_satu(crop, pakai_clahe, jenis=None):
     try:
-        return kenali_crop(crop, pakai_clahe=pakai_clahe)
+        return kenali_crop(crop, pakai_clahe=pakai_clahe, jenis=jenis)
     except Exception as error:
         return {"cnn": "", "tm": "", "n": 0, "status": f"gagal: {error}"}
 
@@ -520,8 +609,9 @@ def jalankan_ocr_semua(det, sertakan_clahe):
         if crop is None or getattr(crop, "size", 0) == 0:
             hasil[f["id"]] = {"tanpa": kosong, "clahe": kosong}
             continue
-        tanpa = kenali_satu(crop, False)
-        clahe = kenali_satu(crop, True) if sertakan_clahe else \
+        jenis = f.get("jenis")
+        tanpa = kenali_satu(crop, False, jenis)
+        clahe = kenali_satu(crop, True, jenis) if sertakan_clahe else \
             {"cnn": "", "tm": "", "n": 0, "status": "-"}
         hasil[f["id"]] = {"tanpa": tanpa, "clahe": clahe}
     return hasil
@@ -594,35 +684,188 @@ def halaman_pengenalan():
                 st.warning(t["status"])
 
 
+RASIO_VALIDASI = 0.20  # mengikuti konstanta VALIDASI di scripts/latih_cnn.py
+
+
+@st.cache_data(show_spinner=False)
+def info_dataset_latih():
+    """
+    Menghitung informasi dataset langsung dari isi folder.
+
+    Pengelompokan kelas mengikuti processing/dataset_loader.py
+    (daftar_folder_kelas), sedangkan pengecualian data dan pembagian
+    latih/validasi mengikuti scripts/latih_cnn.py. Dengan begitu angka
+    pada halaman ini ikut berubah bila isi dataset berubah.
+    """
+
+    from collections import Counter
+    import csv
+    import json
+
+    from processing.dataset_loader import EKSTENSI, daftar_folder_kelas
+
+    dataset = BASE / "dataset"
+
+    # Berkas yang ditandai bermasalah oleh scripts/validasi_dataset.py.
+    bermasalah = set()
+    status = Counter()
+    laporan_ada = False
+
+    csv_path = BASE / "output" / "laporan_dataset" / "hasil_validasi.csv"
+
+    if csv_path.exists():
+        laporan_ada = True
+        with open(csv_path, newline="", encoding="utf-8-sig") as f:
+            for baris in csv.DictReader(f):
+                nilai = (baris.get("status") or "").strip()
+                status[nilai] += 1
+                if nilai and nilai != "OK":
+                    berkas = (baris.get("file") or "").replace("\\", "/")
+                    bermasalah.add(berkas)
+
+    per_kelas = Counter()
+    per_kelas_bersih = Counter()
+    kelompok = Counter()
+    folder_kosong = []
+
+    for folder, label in daftar_folder_kelas():
+
+        if not folder.exists():
+            folder_kosong.append(folder.name)
+            continue
+
+        for berkas in folder.iterdir():
+
+            if not berkas.is_file():
+                continue
+
+            if berkas.suffix.lower() not in EKSTENSI:
+                continue
+
+            per_kelas[label] += 1
+            kelompok[folder.parent.name] += 1
+
+            relatif = berkas.relative_to(dataset).as_posix()
+
+            if relatif in bermasalah:
+                continue
+
+            per_kelas_bersih[label] += 1
+
+    total = sum(per_kelas.values())
+    dipakai = sum(per_kelas_bersih.values())
+    dikecualikan = total - dipakai
+
+    # Tiru pembagian stratified per kelas pada scripts/latih_cnn.py.
+    latih = 0
+    validasi = 0
+
+    for jumlah in per_kelas_bersih.values():
+
+        if jumlah <= 0:
+            continue
+
+        n_validasi = max(1, int(round(jumlah * RASIO_VALIDASI)))
+        validasi += n_validasi
+        latih += jumlah - n_validasi
+
+    kelas_model = 0
+    label_path = BASE / "models" / "labels.json"
+
+    if label_path.exists():
+        try:
+            kelas_model = len(
+                json.loads(label_path.read_text(encoding="utf-8"))
+            )
+        except (ValueError, OSError):
+            kelas_model = 0
+
+    return {
+        "total": total,
+        "huruf": kelompok.get("uppercase", 0) + kelompok.get("lowercase", 0),
+        "angka": kelompok.get("angka", 0),
+        "simbol": kelompok.get("simbol", 0),
+        "kelas_dataset": len(per_kelas),
+        "kelas_model": kelas_model,
+        "dikecualikan": dikecualikan,
+        "dipakai": dipakai,
+        "latih": latih,
+        "validasi": validasi,
+        "laporan_ada": laporan_ada,
+        "status": dict(status),
+        "folder_kosong": sorted(folder_kosong),
+    }
+
+
 def halaman_business_understanding():
     st.header("Business Understanding")
 
-    # 1. Tujuan sistem
-    st.subheader("1. Tujuan Sistem")
-    st.info(
-        "MERRI-STOCK membantu membaca informasi pada nota transaksi secara "
-        "otomatis. Gambar nota yang sebelumnya harus dibaca dan diketik "
-        "manual kini dapat diubah menjadi teks oleh sistem."
+    # 1. Latar Belakang
+    st.subheader("1. Latar Belakang")
+
+    st.write(
+        "MERRI-STOCK digunakan untuk mengenali informasi pada nota transaksi "
+        "CV Merriena Jaya. Nota yang sebelumnya dibaca dan diketik manual "
+        "kini diubah menjadi teks oleh sistem, sehingga pengambilan data "
+        "transaksi menjadi lebih cepat dan konsisten."
     )
 
-    # 2. Cara kerja (diagram alur)
-    st.subheader("2. Cara Kerja")
+    st.write(
+        "Hasil pengenalan teks sangat dipengaruhi oleh kondisi gambar nota. "
+        "Perbedaan kualitas gambar, tingkat kontras, serta bentuk karakter "
+        "yang tidak seragam membuat karakter pada nota sulit dikenali. "
+        "Karena itu kualitas gambar perlu diperbaiki sebelum proses "
+        "pengenalan karakter dilakukan."
+    )
+
+    # 2. Tujuan Sistem
+    st.subheader("2. Tujuan Sistem")
+
+    st.write(
+        "Sistem ini bertujuan menganalisis pengaruh image preprocessing "
+        "terhadap akurasi pengenalan teks nota transaksi. Pengenalan "
+        "karakter dilakukan dengan CNN dan Template Matching yang "
+        "digabungkan dalam satu proses pengenalan karakter, lalu akurasinya "
+        "diukur menggunakan CER (Character Error Rate)."
+    )
+
+    st.info(
+        "Image preprocessing menjadi variabel yang dianalisis, sedangkan CNN "
+        "dan Template Matching adalah metode pengenalan yang bekerja "
+        "bersama pada satu proses yang sama."
+    )
+
+    # 3. Alur Kerja Sistem
+    st.subheader("3. Alur Kerja Sistem")
+
     st.markdown(
         """
         ```
-        Upload Nota  →  Preprocessing  →  Deteksi Field  →  Segmentasi
-              →  Pengenalan Karakter  →  Hasil Teks
+        Upload Nota  →  Image Preprocessing  →  Deteksi Field
+              →  Segmentasi Karakter  →  Pengenalan CNN + Template Matching
+              →  Evaluasi CER
         ```
         """
     )
 
     tahap = [
-        ("Upload Nota", "Gambar nota dimasukkan ke aplikasi."),
-        ("Preprocessing", "Gambar diperbaiki agar tulisan lebih jelas."),
-        ("Deteksi Field", "Sistem mencari lokasi bagian penting pada nota."),
-        ("Segmentasi", "Teks pada tiap bagian dipisah menjadi per karakter."),
-        ("Pengenalan", "Tiap karakter dikenali menjadi huruf/angka."),
-        ("Hasil Teks", "Karakter disusun kembali menjadi teks utuh."),
+        ("Upload Nota",
+         "Gambar nota transaksi (jpg/png) dimasukkan ke aplikasi."),
+        ("Image Preprocessing",
+         "Gambar diperbaiki: CLAHE pada kanal L (clipLimit 2.0) menaikkan "
+         "kontras, lalu citra dibinerkan dengan Otsu."),
+        ("Deteksi Field",
+         "Sistem mencari lokasi bagian penting nota: nomor, penerima, "
+         "proyek, produk, jumlah, dan harga satuan."),
+        ("Segmentasi Karakter",
+         "Teks tiap field dipisah per karakter memakai projection profile "
+         "dan Dynamic Programming."),
+        ("Pengenalan CNN + Template Matching",
+         "Template Matching mencocokkan bentuk potongan dengan template, "
+         "CNN menentukan label akhir tiap karakter."),
+        ("Evaluasi CER",
+         "Teks hasil OCR dibandingkan dengan ground truth, lalu diukur "
+         "dengan CER."),
     ]
 
     for i in range(0, len(tahap), 3):
@@ -633,100 +876,113 @@ def halaman_business_understanding():
                     st.markdown(f"**{i + j + 1}. {nama}**")
                     st.caption(ket)
 
-    # 3. Data
-    st.subheader("3. Data")
+    with st.expander("Rincian metode pengenalan"):
+        metode = [
+            ("Projection", "Menghitung jumlah piksel tinta per kolom untuk "
+                           "menemukan batas antar karakter."),
+            ("Dynamic Programming", "Memilih kombinasi batas karakter terbaik "
+                                    "dari banyak kemungkinan."),
+            ("Template Matching", "Mencocokkan bentuk tiap karakter dengan "
+                                  "template pada dataset untuk mengenalinya."),
+            ("CNN", "Model pembelajaran mesin yang mengenali karakter "
+                    "berdasarkan pola bentuk yang telah dilatih."),
+        ]
+        for nama, ket in metode:
+            st.markdown(f"**{nama}** — {ket}")
 
-    dataset = BASE / "dataset"
-    ekstensi = (".png", ".jpg", ".jpeg")
-    total_gambar = 0
-    rincian = {}
-    if dataset.exists():
-        for jenis in ("huruf", "angka", "simbol"):
-            folder = dataset / jenis
-            if folder.exists():
-                n = len([
-                    p for p in folder.rglob("*")
-                    if p.is_file() and p.suffix.lower() in ekstensi
-                ])
-                rincian[jenis] = n
-                total_gambar += n
+    # 4. Informasi Data Latih
+    st.subheader("4. Informasi Data Latih")
+    st.caption(
+        "Angka pada bagian ini dihitung otomatis dari isi folder dataset "
+        "dan label model, sehingga ikut berubah bila isi dataset berubah."
+    )
 
-    jumlah_kelas = 70
-    label_path = BASE / "models" / "labels.json"
-    if label_path.exists():
-        try:
-            import json
-            with open(label_path, encoding="utf-8") as f:
-                jumlah_kelas = len(json.load(f))
-        except Exception:
-            jumlah_kelas = 70
+    _, kanan = st.columns([5, 1])
+    with kanan:
+        if st.button("Hitung ulang", key="muat_ulang_dataset"):
+            info_dataset_latih.clear()
+            st.rerun()
 
-    jumlah_nota = 0
-    for folder in (BASE / "data_nota_asli", BASE / "data_uji"):
-        if folder.exists():
-            jumlah_nota += len([
-                p for p in folder.glob("*")
-                if p.is_file() and p.suffix.lower() in ekstensi
-            ])
+    info = info_dataset_latih()
 
-    a, b = st.columns(2)
-    with a:
-        with st.container(border=True):
-            st.markdown("**Data Nota**")
-            st.metric("Gambar nota", jumlah_nota)
-            st.caption("Nota transaksi CV Merriena Jaya yang dipakai untuk pengujian.")
-    with b:
-        with st.container(border=True):
-            st.markdown("**Dataset Karakter**")
-            st.metric("Total gambar", total_gambar)
+    if not info["total"]:
+        st.warning("Folder dataset tidak ditemukan atau masih kosong.")
+    else:
+        atas = st.columns(4)
+        atas[0].metric("Total gambar karakter", f"{info['total']:,}")
+        atas[1].metric("Huruf", f"{info['huruf']:,}")
+        atas[2].metric("Angka", f"{info['angka']:,}")
+        atas[3].metric("Simbol", f"{info['simbol']:,}")
+
+        bawah = st.columns(4)
+        bawah[0].metric("Kelas karakter model", info["kelas_model"])
+        bawah[1].metric("Dipakai untuk pelatihan", f"{info['dipakai']:,}")
+        bawah[2].metric("Data latih (80%)", f"{info['latih']:,}")
+        bawah[3].metric("Data validasi (20%)", f"{info['validasi']:,}")
+
+        st.caption(
+            f"Tersedia {info['total']:,} gambar karakter. Sebanyak "
+            f"{info['dikecualikan']:,} gambar dikecualikan karena tidak lolos "
+            f"pemeriksaan dataset, sehingga {info['dipakai']:,} gambar "
+            f"benar-benar dipakai. Dari jumlah tersebut {info['latih']:,} "
+            f"menjadi data latih dan {info['validasi']:,} menjadi data "
+            f"validasi (pembagian stratified {100 - int(RASIO_VALIDASI * 100)}:"
+            f"{int(RASIO_VALIDASI * 100)} per kelas, yaitu latih:validasi)."
+        )
+
+        with st.expander("Rincian pemeriksaan dataset"):
+            st.markdown("**Status berkas menurut laporan validasi**")
+
+            if info["laporan_ada"]:
+                tabel = [
+                    {"Status": nama or "(kosong)", "Jumlah": jumlah}
+                    for nama, jumlah in sorted(info["status"].items())
+                ]
+                st.dataframe(tabel, hide_index=True)
+            else:
+                st.caption(
+                    "Laporan validasi belum tersedia. Jalankan "
+                    "`python scripts/validasi_dataset.py` agar jumlah data "
+                    "yang dikecualikan ikut terhitung."
+                )
+
+            st.markdown("**Kelas karakter**")
             st.caption(
-                f"Huruf {rincian.get('huruf', 0):,} · "
-                f"Angka {rincian.get('angka', 0):,} · "
-                f"Simbol {rincian.get('simbol', 0):,}"
+                f"Dataset berisi {info['kelas_dataset']} kelas dan model "
+                f"mengenali {info['kelas_model']} kelas: huruf A-Z, "
+                f"huruf a-z, angka 0-9, dan simbol."
             )
-            st.caption(f"Jumlah kelas karakter: {jumlah_kelas}")
 
-    # 4. Metode
-    st.subheader("4. Metode")
-    st.caption("Empat metode berikut bekerja berurutan dalam satu alur.")
+            if info["folder_kosong"]:
+                st.caption(
+                    "Folder simbol tanpa gambar (belum menjadi kelas): "
+                    + ", ".join(info["folder_kosong"])
+                )
 
-    metode = [
-        ("Projection", "Menghitung jumlah piksel tinta per kolom untuk "
-                       "menemukan batas antar karakter."),
-        ("Dynamic Programming", "Memilih kombinasi batas karakter terbaik "
-                                "dari banyak kemungkinan."),
-        ("Template Matching", "Mencocokkan bentuk tiap karakter dengan "
-                              "template pada dataset untuk mengenalinya."),
-        ("CNN", "Model pembelajaran mesin yang mengenali karakter "
-                "berdasarkan pola bentuk yang telah dilatih."),
+    # 5. Enam field target
+    st.subheader("5. Enam Field Target")
+    st.caption(
+        "Enam field berikut adalah informasi transaksi yang ingin diekstraksi "
+        "dari nota. Setiap field dipotong dari nota, lalu teksnya dikenali "
+        "satu per satu."
+    )
+
+    field = [
+        ("Nomor Nota", "Nomor urut nota (contoh: 0299)"),
+        ("Nama Penerima", "Nama pemesan atau perusahaan penerima barang"),
+        ("Proyek", "Nama proyek atau lokasi pengiriman"),
+        ("Nama Produk", "Nama barang pada baris transaksi"),
+        ("Jumlah", "Banyaknya barang yang dibeli"),
+        ("Harga Satuan", "Harga per satuan barang (contoh: 139.500)"),
     ]
 
-    for i in range(0, len(metode), 2):
-        kol = st.columns(2)
-        for j, (nama, ket) in enumerate(metode[i:i + 2]):
+    for i in range(0, len(field), 3):
+        kol = st.columns(3)
+        for j, (nama, ket) in enumerate(field[i:i + 3]):
             with kol[j]:
                 with st.container(border=True):
                     st.markdown(f"**{nama}**")
                     st.caption(ket)
-
-    # 5. Informasi yang dibaca
-    st.subheader("5. Informasi yang Dibaca")
-    st.caption("Sistem mengambil lima informasi utama dari nota.")
-
-    field = [
-        ("Nomor Nota", "Nomor urut nota (contoh: 0299)"),
-        ("Tanggal", "Tanggal transaksi"),
-        ("Nama Produk", "Nama barang pada baris transaksi"),
-        ("Jumlah", "Banyaknya barang yang dibeli"),
-        ("Satuan", "Satuan barang (contoh: Pcs, M2, Rit)"),
-    ]
-
-    kol = st.columns(5)
-    for i, (nama, ket) in enumerate(field):
-        with kol[i]:
-            with st.container(border=True):
-                st.markdown(f"**{nama}**")
-                st.caption(ket)
 
 
 GT_CONTOH = {
