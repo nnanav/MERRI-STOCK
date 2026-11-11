@@ -654,7 +654,7 @@ def halaman_pengenalan():
         baris.append(row)
     st.dataframe(baris, use_container_width=True, hide_index=True)
 
-    st.subheader("Detail prediksi per field")
+    st.subheader("Detail hasil per field")
     for f in det["fields"]:
         h = hasil.get(f["id"], {})
         t = h.get("tanpa", {})
@@ -662,24 +662,7 @@ def halaman_pengenalan():
             if f["crop_show"] is not None and getattr(f["crop_show"], "size", 0):
                 st.image(gambar_rgb(f["crop_show"]), width=300)
             st.write("Hasil OCR:", t.get("teks", "") or "—")
-            tm_only = t.get("tm", "") or "—"
-            st.caption(
-                "Pola hasil Template Matching (informasi pendukung): " + tm_only
-            )
-            detail = t.get("detail", [])
-            if detail:
-                tabel_detail = []
-                for i, d in enumerate(detail, 1):
-                    tabel_detail.append({
-                        "Karakter ke": i,
-                        "CNN (label)": d.get("cnn", ""),
-                        "p_CNN": d.get("pc"),
-                        "Pola TM": d.get("tm", ""),
-                        "p_TM": d.get("pt"),
-                        "Dukungan TM": d.get("dukungan_tm", ""),
-                        "Aturan": d.get("aturan", ""),
-                    })
-                st.dataframe(tabel_detail, use_container_width=True, hide_index=True)
+            st.caption(f"Jumlah karakter: {t.get('n', 0)}")
             if t.get("status", "").startswith("gagal"):
                 st.warning(t["status"])
 
