@@ -14,6 +14,7 @@ from processing.pemrosesan_field import (
     isolasi_nomor, bersihkan_minus, pisah_jumlah_satuan,
     cari_tanggal, baca_gambar, mask_merah, segmentasi_per_karakter,
 )
+from processing.ground_truth import gt_field
 
 BASE = Path(__file__).resolve().parent
 
@@ -968,14 +969,6 @@ def halaman_business_understanding():
                     st.caption(ket)
 
 
-GT_CONTOH = {
-    "nota_01.jpeg": "0086",
-    "nota_26.jpeg": "0099",
-    "nota_52.jpeg": "0299",
-    "nota_54.jpeg": "0292",
-}
-
-
 def halaman_evaluasi():
     st.header("Evaluasi (CER)")
     st.caption(
@@ -1003,7 +996,9 @@ def halaman_evaluasi():
     for f in det["fields"]:
         h = hasil.get(f["id"], {})
         t = h.get("tanpa", {})
-        bawaan = GT_CONTOH.get(nama, "") if f["jenis"] == "nomor" else ""
+        # Ground truth diisi otomatis bila nota punya acuan, supaya CER
+        # langsung terhitung. Nilainya tetap bisa diubah manual.
+        bawaan = gt_field(nama, f["id"])
         gt = st.text_input(
             f"Ground truth — {f['label']}", value=bawaan, key=f"gt_{f['id']}"
         )
@@ -1029,7 +1024,7 @@ def halaman_evaluasi():
 
     ringkas = []
     for label, kunci in (
-        ("OCR CNN", "CER"),
+        ("OCR (CNN + Template Matching)", "CER"),
     ):
         if any(kunci in r for r in baris):
             nilai, jumlah = rata(kunci)
