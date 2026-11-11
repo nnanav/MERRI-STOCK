@@ -579,7 +579,7 @@ def halaman_segmentasi():
                 st.image(gambar_rgb(vis), use_container_width=True)
 
             if teks:
-                st.caption(f"Hasil pengenalan (label CNN): {teks}")
+                st.caption(f"Hasil OCR: {teks}")
 
             if karakter:
                 st.caption("Potongan tiap karakter:")
@@ -639,8 +639,8 @@ def halaman_pengenalan():
     st.subheader("Hasil pengenalan semua field")
     st.caption(
         "Segmentasi menemukan kandidat karakter, Template Matching mencocokkan "
-        "polanya, dan CNN menentukan label akhir. Hasil di bawah adalah satu "
-        "teks OCR per field (label dari CNN)."
+        "polanya, dan CNN mengenali tiap karakter. Hasil di bawah adalah satu "
+        "teks OCR per field."
     )
     baris = []
     for f in det["fields"]:
@@ -648,7 +648,7 @@ def halaman_pengenalan():
         t = h.get("tanpa", {})
         row = {
             "Field": f["label"],
-            "Hasil OCR (label CNN)": t.get("teks", "") or "—",
+            "Hasil OCR": t.get("teks", "") or "—",
             "Jumlah karakter": t.get("n", 0),
         }
         baris.append(row)
@@ -661,7 +661,7 @@ def halaman_pengenalan():
         with st.expander(f["label"]):
             if f["crop_show"] is not None and getattr(f["crop_show"], "size", 0):
                 st.image(gambar_rgb(f["crop_show"]), width=300)
-            st.write("Hasil OCR (label CNN):", t.get("teks", "") or "—")
+            st.write("Hasil OCR:", t.get("teks", "") or "—")
             tm_only = t.get("tm", "") or "—"
             st.caption(
                 "Pola hasil Template Matching (informasi pendukung): " + tm_only
@@ -852,8 +852,8 @@ def halaman_business_understanding():
         ("Upload Nota",
          "Gambar nota transaksi (jpg/png) dimasukkan ke aplikasi."),
         ("Image Preprocessing",
-         "Gambar diperbaiki: CLAHE pada kanal L (clipLimit 2.0) menaikkan "
-         "kontras, lalu citra dibinerkan dengan Otsu."),
+         "Ukuran gambar diseragamkan, warna diubah ke grayscale, lalu "
+         "citra dibinerkan dengan Otsu agar tulisan terpisah dari latar."),
         ("Deteksi Field",
          "Sistem mencari lokasi bagian penting nota: nomor, penerima, "
          "proyek, produk, jumlah, dan harga satuan."),
@@ -862,7 +862,7 @@ def halaman_business_understanding():
          "dan Dynamic Programming."),
         ("Pengenalan CNN + Template Matching",
          "Template Matching mencocokkan bentuk potongan dengan template, "
-         "CNN menentukan label akhir tiap karakter."),
+         "CNN mengenali tiap karakter hasil segmentasi."),
         ("Evaluasi CER",
          "Teks hasil OCR dibandingkan dengan ground truth, lalu diukur "
          "dengan CER."),
@@ -997,7 +997,6 @@ def halaman_evaluasi():
     st.header("Evaluasi (CER)")
     st.caption(
         "Tulis ground truth tiap field. Program membandingkan hasil OCR "
-        "(label CNN, dengan Template Matching sebagai pencocok pola) "
         "dengan ground truth menggunakan CER."
     )
 
@@ -1030,12 +1029,12 @@ def halaman_evaluasi():
         row = {
             "Field": f["label"],
             "Ground Truth": gt,
-            "Hasil OCR (label CNN)": teks or "—",
+            "Hasil OCR": teks or "—",
             "CER": None if cer is None else round(cer, 4),
         }
         baris.append(row)
 
-    st.subheader("Hasil OCR (label CNN) vs ground truth")
+    st.subheader("Hasil OCR vs Ground Truth")
     st.dataframe(baris, use_container_width=True, hide_index=True)
 
     st.subheader("Rata-rata CER")

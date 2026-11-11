@@ -21,7 +21,7 @@ Buka browser pada alamat yang ditampilkan (biasanya http://localhost:8501).
 2. **Upload Nota** - unggah gambar nota, lalu klik **Proses Nota**
 3. **Preprocessing** - lihat mask merah nomor nota dan tahapan pengolahan
 4. **Segmentasi** - bounding box per field dan pemisahan per karakter
-5. **Pengenalan** - hasil OCR semua field (label dari CNN)
+5. **Pengenalan** - hasil OCR semua field
 6. **Evaluasi** - isi ground truth, CER dihitung otomatis
 
 ## Struktur Folder
