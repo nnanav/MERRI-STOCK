@@ -502,15 +502,27 @@ def preprocess_nota(gambar):
         # peningkatan kualitas dilewati agar clutter latar tidak ikut
         # direntangkan menjadi noise.
         hasil = potong["gambar"]
+        tampil = hasil
     else:
         x_min, y_min, x_max, y_max = bbox
+        kertas_bersih = tingkatkan_kualitas(potong["crop"])
+
+        # Gambar untuk proses: isi yang sudah ditingkatkan dikembalikan ke
+        # kanvas berukuran asli pada posisi semula. Posisi baris terhadap
+        # kanvas harus tetap sama karena deteksi field memakai fraksi
+        # tinggi/lebar gambar; area di luar kertas sudah putih.
         hasil = potong["gambar"].copy()
-        hasil[y_min:y_max, x_min:x_max] = tingkatkan_kualitas(potong["crop"])
+        hasil[y_min:y_max, x_min:x_max] = kertas_bersih
+
+        # Gambar untuk tampilan: crop ketat yang sudah ditingkatkan, agar
+        # terlihat sebagai nota yang benar-benar terpotong penuh.
+        tampil = kertas_bersih
 
     return {
         "asli": gambar.copy(),
         "crop": potong.get("crop", potong["gambar"]),
         "hasil": hasil,
+        "tampil": tampil,
         "kotak": potong["kotak"],
         "status": potong["status"],
         "pesan": potong["pesan"],

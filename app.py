@@ -527,6 +527,7 @@ def halaman_preprocessing():
             st.session_state["preproses"] = pp
 
     hasil = pp["hasil"]
+    tampil = pp.get("tampil", hasil)
 
     st.subheader("1. Crop dan koreksi perspektif")
     st.caption(pp["pesan"])
@@ -544,22 +545,28 @@ def halaman_preprocessing():
         "terdeteksi; bila batas kertas tidak ditemukan, gambar dipakai apa "
         "adanya (fallback)."
     )
-    st.image(gambar_rgb(hasil), caption="Hasil akhir preprocessing",
+    st.image(gambar_rgb(tampil), caption="Hasil akhir preprocessing",
              width="stretch")
+    st.caption(
+        "Gambar di atas adalah area nota setelah dipotong dan ditingkatkan. "
+        "Pada tahap berikutnya isi yang sama dipakai pada kanvas berukuran "
+        "asli dengan latar putih, agar posisi baris tetap stabil untuk "
+        "deteksi field."
+    )
 
     st.subheader("Mask merah nomor nota")
-    merah = mask_merah(hasil)
+    merah = mask_merah(tampil)
     st.caption(
         "Teks nomor nota dicetak merah. Mask ini menjadi dasar isolasi digit "
         "nomor (huruf 'NO' dan titik dua dibuang, hanya digit yang diambil)."
     )
     c, d = st.columns(2)
     c.image(merah, caption="Mask merah (nomor nota)", width="stretch")
-    d.image(gambar_rgb(cv2.bitwise_and(hasil, hasil, mask=merah)),
+    d.image(gambar_rgb(cv2.bitwise_and(tampil, tampil, mask=merah)),
             caption="Piksel merah saja", width="stretch")
 
     with st.expander("Binerisasi yang dipakai segmentasi"):
-        abu = cv2.cvtColor(hasil, cv2.COLOR_BGR2GRAY)
+        abu = cv2.cvtColor(tampil, cv2.COLOR_BGR2GRAY)
         _, otsu = cv2.threshold(
             abu, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
         )
