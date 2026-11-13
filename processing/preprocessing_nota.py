@@ -182,7 +182,6 @@ def _kotak_dari_isi(gambar):
     sehingga warp berikutnya meluruskan cetak di tempatnya.
     """
     tinggi, lebar = gambar.shape[:2]
-    luas = tinggi * lebar
 
     abu = cv2.cvtColor(gambar, cv2.COLOR_BGR2GRAY)
     abu = cv2.GaussianBlur(abu, (3, 3), 0)
@@ -197,39 +196,30 @@ def _kotak_dari_isi(gambar):
         cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)),
     )
 
-    # Gabungkan karakter menjadi blok baris, lalu antarbaris menyatu.
-    blok = cv2.dilate(
-        tinta, cv2.getStructuringElement(cv2.MORPH_RECT, (35, 9)),
-        iterations=2,
-    )
-    blok = cv2.morphologyEx(
-        blok, cv2.MORPH_CLOSE,
-        cv2.getStructuringElement(cv2.MORPH_RECT, (15, 35)),
-        iterations=2,
-    )
+    # Batas isi diambil dari seluruh piksel tinta, bukan dari blok yang
+    # disaring, agar baris kecil (mis. "Nomor Nota") dan tanda tangan di
+    # bagian bawah tetap masuk ke crop.
+    kolom = np.count_nonzero(tinta, axis=0)
+    baris = np.count_nonzero(tinta, axis=1)
+    # Pita vertikal setinggi halaman adalah artefak scan (tepi folder),
+    # bukan isi nota, jadi tidak dipakai menentukan batas.
+    kolom[kolom > 0.50 * tinggi] = 0
 
-    kontur, _ = cv2.findContours(blok, cv2.RETR_EXTERNAL,
-                                 cv2.CHAIN_APPROX_SIMPLE)
-    berarti = []
-    for c in kontur:
-        if cv2.contourArea(c) < 0.002 * luas:
-            continue
-        x, y, w, h = cv2.boundingRect(c)
-        # Buang artefak tepi scan: pita vertikal tipis yang menjulang
-        # setinggi halaman (tepi folder) memang bukan isi nota. Blok
-        # berwarna TIDAK dibuang karena logo nota berwarna.
-        if h > 0.50 * tinggi and w < 0.20 * lebar:
-            continue
-        berarti.append(c)
-    if not berarti:
+    xs = np.nonzero(kolom > max(2, int(0.002 * tinggi)))[0]
+    ys = np.nonzero(baris > max(2, int(0.002 * lebar)))[0]
+    if xs.size == 0 or ys.size == 0:
         return None
 
-    x_min = min(cv2.boundingRect(c)[0] for c in berarti)
-    y_min = min(cv2.boundingRect(c)[1] for c in berarti)
-    x_max = max(cv2.boundingRect(c)[0] + cv2.boundingRect(c)[2]
-                for c in berarti)
-    y_max = max(cv2.boundingRect(c)[1] + cv2.boundingRect(c)[3]
-                for c in berarti)
+    x_min, x_max = int(xs[0]), int(xs[-1]) + 1
+    y_min, y_max = int(ys[0]), int(ys[-1]) + 1
+
+    # Margin kecil supaya tepi huruf paling luar tidak terpotong.
+    mx = max(3, int(0.02 * (x_max - x_min)))
+    my = max(3, int(0.02 * (y_max - y_min)))
+    x_min = max(0, x_min - mx)
+    x_max = min(lebar, x_max + mx)
+    y_min = max(0, y_min - my)
+    y_max = min(tinggi, y_max + my)
 
     if (x_max - x_min) < 0.30 * lebar or (y_max - y_min) < 0.30 * tinggi:
         return None
@@ -349,13 +339,16 @@ def crop_dan_luruskan(gambar):
     faktor = 0.06 if cara == "isi" else 0.01
     kotak = _longgarkan(kotak, gambar, faktor)
     if cara == "isi":
-        # Batas isi hanya dipakai untuk memotong dan membersihkan latar;
-        # cetak tidak diputar agar posisi baris tetap sama dengan yang
-        # diharapkan oleh deteksi field.
-        x_min = int(max(0, np.floor(kotak[:, 0].min())))
-        y_min = int(max(0, np.floor(kotak[:, 1].min())))
-        x_max = int(min(lebar, np.ceil(kotak[:, 0].max())))
-        y_max = int(min(tinggi, np.ceil(kotak[:, 1].max())))
+        # Kertas dan latar sama-sama putih (scan berlatar putih), sehingga
+        # batas kertas tidak bisa dipisahkan. Supaya nota TIDAK terpotong,
+        # seluruh gambar dipakai; hanya pita tepi yang jelas bukan kertas
+        # (strip folder / bayangan) yang dipangkas.
+        _, geser = _trim_latar(gambar, maks=0.10)
+        x_min = int(geser[0])
+        y_min = int(geser[1])
+        x_max = int(lebar - geser[2])
+        y_max = int(tinggi - geser[3])
+
         kanvas = gambar.copy()
         kanvas[:y_min, :] = 255
         kanvas[y_max:, :] = 255
@@ -369,8 +362,8 @@ def crop_dan_luruskan(gambar):
             "kotak": kotak,
             "status": "crop_saja",
             "pesan": (
-                "Area isi nota dipotong dan latar di luarnya diganti putih; "
-                "cetak tidak diputar agar posisi baris tetap konsisten."
+                "Kertas dan latar sama-sama putih, jadi seluruh gambar nota "
+                "dipakai; hanya pita tepi bukan kertas yang dipangkas."
             ),
         }
 
