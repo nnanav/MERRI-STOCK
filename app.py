@@ -554,9 +554,21 @@ def halaman_preprocessing():
         "deteksi field."
     )
     st.caption(
-        "Deteksi nomor nota (mask merah) dan binerisasi karakter bukan bagian "
-        "preprocessing; keduanya ditampilkan pada halaman Segmentasi."
+        "Deteksi nomor nota (mask merah) bukan bagian preprocessing; "
+        "tampilannya ada pada halaman Segmentasi bersama hasil deteksi field."
     )
+
+    with st.expander("Binerisasi (grayscale + Otsu)"):
+        abu = cv2.cvtColor(tampil, cv2.COLOR_BGR2GRAY)
+        _, otsu = cv2.threshold(
+            abu, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
+        )
+        st.image(abu, caption="Grayscale", width="stretch")
+        st.image(otsu, caption="Binarisasi Otsu", width="stretch")
+        st.caption(
+            "Grayscale dan binerisasi Otsu termasuk tahap preprocessing; "
+            "hasilnya dipakai tahap segmentasi karakter."
+        )
 
 
 def halaman_segmentasi():
@@ -593,18 +605,6 @@ def halaman_segmentasi():
                      caption="Crop digit nomor", width="stretch")
         else:
             k3.caption("Crop digit nomor tidak tersedia.")
-
-    with st.expander("Binerisasi yang dipakai segmentasi"):
-        abu = cv2.cvtColor(det["kecil"], cv2.COLOR_BGR2GRAY)
-        _, otsu = cv2.threshold(
-            abu, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
-        )
-        st.image(abu, caption="Grayscale", width="stretch")
-        st.image(otsu, caption="Binarisasi Otsu", width="stretch")
-        st.caption(
-            "Binerisasi inilah yang dipakai tahap segmentasi karakter; "
-            "bukan bagian dari preprocessing gambar."
-        )
 
     st.subheader("Bounding box tiap field")
     st.caption("Setiap kotak menandai lokasi satu field pada nota.")
