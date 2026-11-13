@@ -127,6 +127,93 @@ def deteksi_batas_kertas(gambar):
     }
 
 
+def _bersihkan_latar(crop):
+    """
+    Putihkan sisa latar yang menempel pada crop.
+
+    Wilayah yang jauh lebih gelap dari kertas (meja, bayangan) atau
+    berwarna pekat (strip folder) dan membentuk komponen besar yang
+    menyentuh tepi crop dianggap latar, lalu diganti putih. Tinta tulisan
+    tidak tersentuh karena komponennya kecil dan tidak menempel tepi.
+    """
+    h, w = crop.shape[:2]
+    if h < 40 or w < 40:
+        return crop
+
+    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+    tengah = hsv[int(0.3 * h):int(0.7 * h), int(0.3 * w):int(0.7 * w)]
+    if tengah.size == 0:
+        return crop
+    v_ref = float(np.median(tengah[..., 2]))
+
+    v = hsv[..., 2].astype(np.float32)
+    s = hsv[..., 1].astype(np.float32)
+    # Latar = abu-abu sedang (meja/bayangan) atau berwarna pekat (strip).
+    # Tinta tulisan jauh lebih gelap sehingga tidak ikut terpilih.
+    mask = (
+        ((v > 0.45 * v_ref) & (v < 0.85 * v_ref)) | (s > 45)
+    ).astype(np.uint8)
+
+    # Satukan piksel latar yang berdekatan agar menjadi komponen utuh.
+    mask = cv2.morphologyEx(
+        mask, cv2.MORPH_CLOSE,
+        cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9)),
+    )
+
+    n, lab, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    for i in range(1, n):
+        x, y, bw, bh, area = stats[i]
+        menyentuh = (x <= 1 or y <= 1 or x + bw >= w - 1 or y + bh >= h - 1)
+        if menyentuh and area >= 0.0015 * h * w:
+            crop[lab == i] = (255, 255, 255)
+    return crop
+
+
+
+def _trim_latar(crop, maks=0.22):
+    """
+    Pangkas pita latar yang masih menempel di tepi crop.
+
+    Sisi crop digeser ke dalam selama pita tepinya terlihat seperti latar:
+    jauh lebih gelap dari kertas (meja abu-abu, bayangan) atau berwarna
+    pekat (strip folder). Kertas putih/terang tidak ikut terpotong.
+    Mengembalikan (crop_terpotong, (kiri, atas, kanan, bawah)).
+    """
+    h, w = crop.shape[:2]
+    if h < 40 or w < 40:
+        return crop, (0, 0, 0, 0)
+
+    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+    tengah = hsv[int(0.3 * h):int(0.7 * h), int(0.3 * w):int(0.7 * w)]
+    if tengah.size == 0:
+        return crop, (0, 0, 0, 0)
+    v_ref = float(np.median(tengah[..., 2]))
+
+    langkah = max(2, int(0.005 * min(h, w)))
+
+    def buruk(band):
+        if band.size == 0:
+            return False
+        v = float(np.median(band[..., 2]))
+        s = float(np.median(band[..., 1]))
+        return v < 0.82 * v_ref or s > 35
+
+    x0 = y0 = 0
+    x1, y1 = w, h
+    while x0 < int(maks * w) and buruk(hsv[y0:y1, x0:x0 + langkah]):
+        x0 += langkah
+    while x1 > w - int(maks * w) and buruk(hsv[y0:y1, x1 - langkah:x1]):
+        x1 -= langkah
+    while y0 < int(maks * h) and buruk(hsv[y0:y0 + langkah, x0:x1]):
+        y0 += langkah
+    while y1 > h - int(maks * h) and buruk(hsv[y1 - langkah:y1, x0:x1]):
+        y1 -= langkah
+
+    if (x0, y0, x1, y1) == (0, 0, w, h):
+        return crop, (0, 0, 0, 0)
+    return crop[y0:y1, x0:x1].copy(), (x0, y0, w - x1, h - y1)
+
+
 def _kotak_dari_isi(gambar):
     """
     Perkirakan kotak nota dari isi cetakannya.
@@ -320,6 +407,7 @@ def crop_dan_luruskan(gambar):
         kanvas[y_max:, :] = 255
         kanvas[:, :x_min] = 255
         kanvas[:, x_max:] = 255
+
         return {
             "gambar": kanvas,
             "crop": kanvas[y_min:y_max, x_min:x_max].copy(),
@@ -496,31 +584,34 @@ def preprocess_nota(gambar):
     """
     potong = crop_dan_luruskan(gambar)
     bbox = potong.get("bbox")
+    crop_base = potong.get("crop", potong["gambar"])
 
     if bbox is None:
         # Fallback: batas kertas tidak terpisah dari latar, sehingga
         # peningkatan kualitas dilewati agar clutter latar tidak ikut
         # direntangkan menjadi noise.
         hasil = potong["gambar"]
+        crop_tampil = crop_base
         tampil = hasil
     else:
         x_min, y_min, x_max, y_max = bbox
-        kertas_bersih = tingkatkan_kualitas(potong["crop"])
+        kertas = tingkatkan_kualitas(crop_base)
 
         # Gambar untuk proses: isi yang sudah ditingkatkan dikembalikan ke
         # kanvas berukuran asli pada posisi semula. Posisi baris terhadap
         # kanvas harus tetap sama karena deteksi field memakai fraksi
         # tinggi/lebar gambar; area di luar kertas sudah putih.
         hasil = potong["gambar"].copy()
-        hasil[y_min:y_max, x_min:x_max] = kertas_bersih
+        hasil[y_min:y_max, x_min:x_max] = kertas
 
-        # Gambar untuk tampilan: crop ketat yang sudah ditingkatkan, agar
-        # terlihat sebagai nota yang benar-benar terpotong penuh.
-        tampil = kertas_bersih
+        # Gambar untuk tampilan: crop ketat yang dirapikan (sisa latar di
+        # tepinya dibuang) agar nota terlihat terpotong penuh.
+        crop_tampil = _bersihkan_latar(_trim_latar(crop_base)[0])
+        tampil = _bersihkan_latar(_trim_latar(kertas)[0])
 
     return {
         "asli": gambar.copy(),
-        "crop": potong.get("crop", potong["gambar"]),
+        "crop": crop_tampil,
         "hasil": hasil,
         "tampil": tampil,
         "kotak": potong["kotak"],
