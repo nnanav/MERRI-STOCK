@@ -127,49 +127,6 @@ def deteksi_batas_kertas(gambar):
     }
 
 
-def _bersihkan_latar(crop):
-    """
-    Putihkan sisa latar yang menempel pada crop.
-
-    Wilayah yang jauh lebih gelap dari kertas (meja, bayangan) atau
-    berwarna pekat (strip folder) dan membentuk komponen besar yang
-    menyentuh tepi crop dianggap latar, lalu diganti putih. Tinta tulisan
-    tidak tersentuh karena komponennya kecil dan tidak menempel tepi.
-    """
-    h, w = crop.shape[:2]
-    if h < 40 or w < 40:
-        return crop
-
-    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
-    tengah = hsv[int(0.3 * h):int(0.7 * h), int(0.3 * w):int(0.7 * w)]
-    if tengah.size == 0:
-        return crop
-    v_ref = float(np.median(tengah[..., 2]))
-
-    v = hsv[..., 2].astype(np.float32)
-    s = hsv[..., 1].astype(np.float32)
-    # Latar = abu-abu sedang (meja/bayangan) atau berwarna pekat (strip).
-    # Tinta tulisan jauh lebih gelap sehingga tidak ikut terpilih.
-    mask = (
-        ((v > 0.45 * v_ref) & (v < 0.85 * v_ref)) | (s > 45)
-    ).astype(np.uint8)
-
-    # Satukan piksel latar yang berdekatan agar menjadi komponen utuh.
-    mask = cv2.morphologyEx(
-        mask, cv2.MORPH_CLOSE,
-        cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9)),
-    )
-
-    n, lab, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
-    for i in range(1, n):
-        x, y, bw, bh, area = stats[i]
-        menyentuh = (x <= 1 or y <= 1 or x + bw >= w - 1 or y + bh >= h - 1)
-        if menyentuh and area >= 0.0015 * h * w:
-            crop[lab == i] = (255, 255, 255)
-    return crop
-
-
-
 def _trim_latar(crop, maks=0.22):
     """
     Pangkas pita latar yang masih menempel di tepi crop.
@@ -253,18 +210,15 @@ def _kotak_dari_isi(gambar):
 
     kontur, _ = cv2.findContours(blok, cv2.RETR_EXTERNAL,
                                  cv2.CHAIN_APPROX_SIMPLE)
-    hsv = cv2.cvtColor(gambar, cv2.COLOR_BGR2HSV)
     berarti = []
     for c in kontur:
         if cv2.contourArea(c) < 0.002 * luas:
             continue
         x, y, w, h = cv2.boundingRect(c)
-        # Buang artefak tepi scan: pita vertikal tipis (mis. tepi folder
-        # atau strip warna) yang menjulang setinggi halaman bukan isi nota.
+        # Buang artefak tepi scan: pita vertikal tipis yang menjulang
+        # setinggi halaman (tepi folder) memang bukan isi nota. Blok
+        # berwarna TIDAK dibuang karena logo nota berwarna.
         if h > 0.50 * tinggi and w < 0.20 * lebar:
-            continue
-        # Buang blok berwarna pekat (strip folder) yang bukan isi cetak.
-        if cv2.mean(hsv[y:y + h, x:x + w])[1] > 40:
             continue
         berarti.append(c)
     if not berarti:
@@ -604,10 +558,10 @@ def preprocess_nota(gambar):
         hasil = potong["gambar"].copy()
         hasil[y_min:y_max, x_min:x_max] = kertas
 
-        # Gambar untuk tampilan: crop ketat yang dirapikan (sisa latar di
-        # tepinya dibuang) agar nota terlihat terpotong penuh.
-        crop_tampil = _bersihkan_latar(_trim_latar(crop_base)[0])
-        tampil = _bersihkan_latar(_trim_latar(kertas)[0])
+        # Gambar untuk tampilan: crop ketat yang dirapikan tepinya saja.
+        # Tidak ada piksel isi yang diubah/dihapus.
+        crop_tampil = _trim_latar(crop_base)[0]
+        tampil = _trim_latar(kertas)[0]
 
     return {
         "asli": gambar.copy(),
