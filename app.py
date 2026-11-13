@@ -531,10 +531,9 @@ def halaman_preprocessing():
     st.subheader("1. Crop dan koreksi perspektif")
     st.caption(pp["pesan"])
     a, b = st.columns(2)
-    a.image(gambar_rgb(pp["asli"]), caption="Nota asli",
-            use_container_width=True)
+    a.image(gambar_rgb(pp["asli"]), caption="Nota asli", width="stretch")
     b.image(gambar_rgb(pp["crop"]), caption="Hasil crop kertas nota",
-            use_container_width=True)
+            width="stretch")
 
     st.subheader("2. Peningkatan kualitas gambar")
     st.caption(
@@ -546,7 +545,7 @@ def halaman_preprocessing():
         "adanya (fallback)."
     )
     st.image(gambar_rgb(hasil), caption="Hasil akhir preprocessing",
-             use_container_width=True)
+             width="stretch")
 
     st.subheader("Mask merah nomor nota")
     merah = mask_merah(hasil)
@@ -555,18 +554,17 @@ def halaman_preprocessing():
         "nomor (huruf 'NO' dan titik dua dibuang, hanya digit yang diambil)."
     )
     c, d = st.columns(2)
-    c.image(merah, caption="Mask merah (nomor nota)", use_container_width=True)
+    c.image(merah, caption="Mask merah (nomor nota)", width="stretch")
     d.image(gambar_rgb(cv2.bitwise_and(hasil, hasil, mask=merah)),
-            caption="Piksel merah saja", use_container_width=True)
+            caption="Piksel merah saja", width="stretch")
 
     with st.expander("Binerisasi yang dipakai segmentasi"):
         abu = cv2.cvtColor(hasil, cv2.COLOR_BGR2GRAY)
         _, otsu = cv2.threshold(
             abu, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
         )
-        e, f = st.columns(2)
-        e.image(abu, caption="Grayscale", use_container_width=True)
-        f.image(otsu, caption="Binarisasi Otsu", use_container_width=True)
+        st.image(abu, caption="Grayscale", width="stretch")
+        st.image(otsu, caption="Binarisasi Otsu", width="stretch")
         st.caption(
             "Hasil akhir preprocessing di atas yang diteruskan ke deteksi "
             "field, segmentasi karakter, dan pengenalan."
