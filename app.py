@@ -12,7 +12,7 @@ from processing.deteksi_field import (
 )
 from processing.pemrosesan_field import (
     isolasi_nomor, bersihkan_minus, pisah_jumlah_satuan,
-    cari_tanggal, baca_gambar, mask_merah, segmentasi_per_karakter,
+    cari_tanggal, baca_gambar, segmentasi_per_karakter,
 )
 from processing.ground_truth import gt_field
 from processing.preprocessing_nota import preprocess_nota
@@ -553,29 +553,10 @@ def halaman_preprocessing():
         "asli dengan latar putih, agar posisi baris tetap stabil untuk "
         "deteksi field."
     )
-
-    st.subheader("Mask merah nomor nota")
-    merah = mask_merah(tampil)
     st.caption(
-        "Teks nomor nota dicetak merah. Mask ini menjadi dasar isolasi digit "
-        "nomor (huruf 'NO' dan titik dua dibuang, hanya digit yang diambil)."
+        "Deteksi nomor nota (mask merah) dan binerisasi karakter bukan bagian "
+        "preprocessing; keduanya ditampilkan pada halaman Segmentasi."
     )
-    c, d = st.columns(2)
-    c.image(merah, caption="Mask merah (nomor nota)", width="stretch")
-    d.image(gambar_rgb(cv2.bitwise_and(tampil, tampil, mask=merah)),
-            caption="Piksel merah saja", width="stretch")
-
-    with st.expander("Binerisasi yang dipakai segmentasi"):
-        abu = cv2.cvtColor(tampil, cv2.COLOR_BGR2GRAY)
-        _, otsu = cv2.threshold(
-            abu, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
-        )
-        st.image(abu, caption="Grayscale", width="stretch")
-        st.image(otsu, caption="Binarisasi Otsu", width="stretch")
-        st.caption(
-            "Hasil akhir preprocessing di atas yang diteruskan ke deteksi "
-            "field, segmentasi karakter, dan pengenalan."
-        )
 
 
 def halaman_segmentasi():
@@ -588,6 +569,42 @@ def halaman_segmentasi():
     if det is None:
         st.info("Klik 'Proses Nota' di halaman Upload terlebih dahulu.")
         return
+
+    nomor = det.get("nomor", {})
+    st.subheader("Deteksi nomor nota (mask merah)")
+    st.caption(
+        "Mask merah hanya dihitung pada wilayah kanan-atas tempat nomor nota "
+        "berada, lalu dipakai mengisolasi digit nomor; huruf 'NO' dan titik "
+        "dua dibuang sehingga hanya digit yang tersisa. Mask tidak diterapkan "
+        "ke seluruh gambar nota."
+    )
+    st.caption(
+        f"Status: {nomor.get('status', '-')} — {nomor.get('pesan', '')}"
+    )
+    if nomor.get("mask") is not None:
+        k1, k2, k3 = st.columns(3)
+        k1.image(nomor["mask"], caption="Mask merah (wilayah nomor)",
+                 width="stretch")
+        k2.image(gambar_rgb(cv2.bitwise_and(det["kecil"], det["kecil"],
+                                            mask=nomor["mask"])),
+                 caption="Piksel merah saja", width="stretch")
+        if nomor.get("crop_digit") is not None:
+            k3.image(gambar_rgb(nomor["crop_digit"]),
+                     caption="Crop digit nomor", width="stretch")
+        else:
+            k3.caption("Crop digit nomor tidak tersedia.")
+
+    with st.expander("Binerisasi yang dipakai segmentasi"):
+        abu = cv2.cvtColor(det["kecil"], cv2.COLOR_BGR2GRAY)
+        _, otsu = cv2.threshold(
+            abu, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
+        )
+        st.image(abu, caption="Grayscale", width="stretch")
+        st.image(otsu, caption="Binarisasi Otsu", width="stretch")
+        st.caption(
+            "Binerisasi inilah yang dipakai tahap segmentasi karakter; "
+            "bukan bagian dari preprocessing gambar."
+        )
 
     st.subheader("Bounding box tiap field")
     st.caption("Setiap kotak menandai lokasi satu field pada nota.")
