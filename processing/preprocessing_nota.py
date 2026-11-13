@@ -340,20 +340,26 @@ def crop_dan_luruskan(gambar):
     kotak = _longgarkan(kotak, gambar, faktor)
     if cara == "isi":
         # Kertas dan latar sama-sama putih (scan berlatar putih), sehingga
-        # batas kertas tidak bisa dipisahkan. Supaya nota TIDAK terpotong,
-        # seluruh gambar dipakai; hanya pita tepi yang jelas bukan kertas
-        # (strip folder / bayangan) yang dipangkas.
-        _, geser = _trim_latar(gambar, maks=0.10)
-        x_min = int(geser[0])
-        y_min = int(geser[1])
-        x_max = int(lebar - geser[2])
-        y_max = int(tinggi - geser[3])
+        # batas kertas dicari dari garis tipis tepi kertas: puncak gradien
+        # kolom di sepertiga kiri gambar. Crop dimulai tepat di garis itu
+        # supaya latar putih di kiri tidak ikut, tanpa memotong isi nota.
+        abu_f = cv2.cvtColor(gambar, cv2.COLOR_BGR2GRAY).astype(np.float32)
+        grad = np.abs(cv2.Sobel(abu_f, cv2.CV_32F, 1, 0, ksize=3)).mean(axis=0)
+        tengah = int(0.35 * lebar)
+        kiri = int(np.argmax(grad[:tengah]))
+        v_kol = float(abu_f[:, kiri].mean())
+        v_ref = float(np.median(abu_f[int(0.3 * tinggi):int(0.7 * tinggi),
+                                       int(0.3 * lebar):int(0.7 * lebar)]))
+        if grad[kiri] > max(30.0, 6.0 * float(np.median(grad))) \
+                and v_kol < 0.94 * v_ref:
+            x_min = max(0, kiri - 2)
+        else:
+            x_min = 0
+        y_min = 0
+        x_max = lebar
+        y_max = tinggi
 
         kanvas = gambar.copy()
-        kanvas[:y_min, :] = 255
-        kanvas[y_max:, :] = 255
-        kanvas[:, :x_min] = 255
-        kanvas[:, x_max:] = 255
 
         return {
             "gambar": kanvas,
@@ -362,8 +368,8 @@ def crop_dan_luruskan(gambar):
             "kotak": kotak,
             "status": "crop_saja",
             "pesan": (
-                "Kertas dan latar sama-sama putih, jadi seluruh gambar nota "
-                "dipakai; hanya pita tepi bukan kertas yang dipangkas."
+                "Kertas dan latar sama-sama putih; crop dimulai dari garis "
+                "tepi kertas yang terdeteksi di sisi kiri."
             ),
         }
 
