@@ -15,6 +15,7 @@ from processing.pemrosesan_field import (
     cari_tanggal, baca_gambar, mask_merah, segmentasi_per_karakter,
 )
 from processing.ground_truth import gt_field
+from processing.preprocessing_nota import preprocess_nota
 
 BASE = Path(__file__).resolve().parent
 
@@ -213,6 +214,12 @@ def perluas_kotak_kiri(kecil, box, batas_kiri=0, faktor_gap=0.6):
 
 
 def jalankan_deteksi(gambar_bgr):
+    # Preprocessing lebih dulu: kertas nota dipotong, perspektif diluruskan,
+    # lalu kualitas gambar ditingkatkan dengan satu metode terpilih.
+    # Hasilnya yang diteruskan ke deteksi field dan tahap sesudahnya.
+    preproses = preprocess_nota(gambar_bgr)
+    gambar_bgr = preproses["hasil"]
+
     # Deteksi lima field. Koordinat di ruang gambar yang lebarnya 1400.
     kecil, biner, visual, kotak = deteksi_baris(gambar_bgr)
     H, W = kecil.shape[:2]
@@ -370,6 +377,7 @@ def jalankan_deteksi(gambar_bgr):
         "kecil": kecil, "biner": biner, "visual": visual,
         "kandidat": kandidat, "nomor": nomor,
         "produk": produk, "fields": fields,
+        "preproses": preproses,
     }
 
 
@@ -478,6 +486,7 @@ def halaman_upload():
             st.session_state["deteksi"] = None
             st.session_state["ocr_semua"] = None
             st.session_state["ocr_kunci"] = None
+            st.session_state["preproses"] = None
 
     gambar = st.session_state.get("gambar_bgr")
     nama = st.session_state.get("nama_file")
@@ -509,31 +518,59 @@ def halaman_preprocessing():
         st.info("Unggah nota di halaman Upload terlebih dahulu.")
         return
 
-    abu = cv2.cvtColor(gambar, cv2.COLOR_BGR2GRAY)
-    _, otsu = cv2.threshold(abu, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    merah = mask_merah(gambar)
+    nama = st.session_state.get("nama_file")
+    pp = st.session_state.get("preproses")
+    if pp is None or pp.get("nama") != nama:
+        with st.spinner("Menyiapkan preprocessing (crop + peningkatan kualitas)..."):
+            pp = preprocess_nota(gambar)
+            pp["nama"] = nama
+            st.session_state["preproses"] = pp
+
+    hasil = pp["hasil"]
+
+    st.subheader("1. Crop dan koreksi perspektif")
+    st.caption(pp["pesan"])
+    a, b = st.columns(2)
+    a.image(gambar_rgb(pp["asli"]), caption="Nota asli",
+            use_container_width=True)
+    b.image(gambar_rgb(pp["crop"]), caption="Hasil crop kertas nota",
+            use_container_width=True)
+
+    st.subheader("2. Peningkatan kualitas gambar")
+    st.caption(
+        f"Metode terpilih: {pp['metode']} pada kanal luminansi. Rentang "
+        "intensitas kertas direntangkan sehingga tulisan yang tipis lebih "
+        "terpisah dari latar, tanpa mengubah warna dan tanpa menambah "
+        "kontras tekstur kertas. Metode diterapkan pada area kertas yang "
+        "terdeteksi; bila batas kertas tidak ditemukan, gambar dipakai apa "
+        "adanya (fallback)."
+    )
+    st.image(gambar_rgb(hasil), caption="Hasil akhir preprocessing",
+             use_container_width=True)
 
     st.subheader("Mask merah nomor nota")
+    merah = mask_merah(hasil)
     st.caption(
         "Teks nomor nota dicetak merah. Mask ini menjadi dasar isolasi digit "
         "nomor (huruf 'NO' dan titik dua dibuang, hanya digit yang diambil)."
     )
-    a, b = st.columns(2)
-    a.image(merah, caption="Mask merah (nomor nota)", use_container_width=True)
-    b.image(gambar_rgb(cv2.bitwise_and(gambar, gambar, mask=merah)),
+    c, d = st.columns(2)
+    c.image(merah, caption="Mask merah (nomor nota)", use_container_width=True)
+    d.image(gambar_rgb(cv2.bitwise_and(hasil, hasil, mask=merah)),
             caption="Piksel merah saja", use_container_width=True)
 
-    st.subheader("Tahapan preprocessing")
-    c, d = st.columns(2)
-    c.image(gambar_rgb(gambar), caption="Asli", use_container_width=True)
-    e, f = st.columns(2)
-    e.image(abu, caption="Grayscale", use_container_width=True)
-    f.image(otsu, caption="Binarisasi Otsu", use_container_width=True)
-
-    st.caption(
-        "Preprocessing memakai grayscale dan binarisasi Otsu. "
-        "Hasil preprocessing inilah yang dipakai tahap segmentasi karakter."
-    )
+    with st.expander("Binerisasi yang dipakai segmentasi"):
+        abu = cv2.cvtColor(hasil, cv2.COLOR_BGR2GRAY)
+        _, otsu = cv2.threshold(
+            abu, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
+        )
+        e, f = st.columns(2)
+        e.image(abu, caption="Grayscale", use_container_width=True)
+        f.image(otsu, caption="Binarisasi Otsu", use_container_width=True)
+        st.caption(
+            "Hasil akhir preprocessing di atas yang diteruskan ke deteksi "
+            "field, segmentasi karakter, dan pengenalan."
+        )
 
 
 def halaman_segmentasi():
