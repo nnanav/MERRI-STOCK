@@ -83,6 +83,7 @@ def deteksi_batas_kertas(gambar):
             return {
                 "kotak": kotak,
                 "status": "ketemu",
+                "cara": "intensitas",
                 "pesan": "Batas kertas dipisahkan dari latar berdasarkan "
                          "intensitas (Otsu).",
             }
@@ -97,14 +98,151 @@ def deteksi_batas_kertas(gambar):
         return {
             "kotak": kotak,
             "status": "ketemu",
+            "cara": "tepi",
             "pesan": "Batas kertas ditemukan dari peta tepi (Canny).",
+        }
+
+    # Strategi 3: bila kertas dan latar sama-sama terang sehingga tepinya
+    # tidak terpisah, pakai batas isi nota (blok teks) plus margin sebagai
+    # pengganti batas kertas, sekaligus memperkirakan kemiringannya.
+    temu_isi = _kotak_dari_isi(gambar)
+    if temu_isi is not None:
+        kotak, sudut = temu_isi
+        return {
+            "kotak": kotak,
+            "status": "ketemu",
+            "cara": "isi",
+            "pesan": (
+                f"Tepi kertas tidak terpisah dari latar; batas crop diambil "
+                f"dari area isi nota plus margin dan kemiringan {sudut:.1f}° "
+                "diluruskan."
+            ),
         }
 
     return {
         "kotak": None,
         "status": "tidak_ketemu",
+        "cara": None,
         "pesan": "Batas kertas tidak dapat dipisahkan dari latar.",
     }
+
+
+def _kotak_dari_isi(gambar):
+    """
+    Perkirakan kotak nota dari isi cetakannya.
+
+    Teks dan garis nota digabung menjadi blok; kotak pembungkus isi
+    diambil, lalu kemiringan cetak diperkirakan lewat profil proyeksi
+    baris (sudut yang membuat baris teks paling rapi). Kotak sumber
+    dibuat sebagai kotak isi yang diputar sebesar kemiringan tersebut,
+    sehingga warp berikutnya meluruskan cetak di tempatnya.
+    """
+    tinggi, lebar = gambar.shape[:2]
+    luas = tinggi * lebar
+
+    abu = cv2.cvtColor(gambar, cv2.COLOR_BGR2GRAY)
+    abu = cv2.GaussianBlur(abu, (3, 3), 0)
+
+    # Ambang adaptif tahan terhadap pencahayaan yang tidak merata.
+    tinta = cv2.adaptiveThreshold(
+        abu, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY_INV, 51, 10,
+    )
+    tinta = cv2.morphologyEx(
+        tinta, cv2.MORPH_OPEN,
+        cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)),
+    )
+
+    # Gabungkan karakter menjadi blok baris, lalu antarbaris menyatu.
+    blok = cv2.dilate(
+        tinta, cv2.getStructuringElement(cv2.MORPH_RECT, (35, 9)),
+        iterations=2,
+    )
+    blok = cv2.morphologyEx(
+        blok, cv2.MORPH_CLOSE,
+        cv2.getStructuringElement(cv2.MORPH_RECT, (15, 35)),
+        iterations=2,
+    )
+
+    kontur, _ = cv2.findContours(blok, cv2.RETR_EXTERNAL,
+                                 cv2.CHAIN_APPROX_SIMPLE)
+    hsv = cv2.cvtColor(gambar, cv2.COLOR_BGR2HSV)
+    berarti = []
+    for c in kontur:
+        if cv2.contourArea(c) < 0.002 * luas:
+            continue
+        x, y, w, h = cv2.boundingRect(c)
+        # Buang artefak tepi scan: pita vertikal tipis (mis. tepi folder
+        # atau strip warna) yang menjulang setinggi halaman bukan isi nota.
+        if h > 0.50 * tinggi and w < 0.20 * lebar:
+            continue
+        # Buang blok berwarna pekat (strip folder) yang bukan isi cetak.
+        if cv2.mean(hsv[y:y + h, x:x + w])[1] > 40:
+            continue
+        berarti.append(c)
+    if not berarti:
+        return None
+
+    x_min = min(cv2.boundingRect(c)[0] for c in berarti)
+    y_min = min(cv2.boundingRect(c)[1] for c in berarti)
+    x_max = max(cv2.boundingRect(c)[0] + cv2.boundingRect(c)[2]
+                for c in berarti)
+    y_max = max(cv2.boundingRect(c)[1] + cv2.boundingRect(c)[3]
+                for c in berarti)
+
+    if (x_max - x_min) < 0.30 * lebar or (y_max - y_min) < 0.30 * tinggi:
+        return None
+
+    sudut = _estimasi_sudut(abu, (x_min, y_min, x_max, y_max))
+    if sudut is None:
+        return None
+
+    pusat = ((x_min + x_max) / 2.0, (y_min + y_max) / 2.0)
+    pojok = np.array(
+        [[x_min, y_min], [x_max, y_min], [x_max, y_max], [x_min, y_max]],
+        dtype="float32",
+    )
+    m = cv2.getRotationMatrix2D(pusat, -sudut, 1.0)
+    pojok_sumber = pojok @ m[:, :2].T + m[:, 2]
+    return _urutkan_titik(pojok_sumber), sudut
+
+
+def _estimasi_sudut(abu, bbox, kandidat=None):
+    """
+    Cari kemiringan cetak (derajat) lewat profil proyeksi baris.
+
+    Sudut terbaik membuat tinta terkonsentrasi pada baris-baris tertentu,
+    sehingga ragam profil proyeksi baris maksimum.
+    """
+    x_min, y_min, x_max, y_max = bbox
+    area = abu[y_min:y_max, x_min:x_max]
+    if area.size == 0:
+        return None
+    if kandidat is None:
+        kandidat = [-3.0, -2.0, -1.0, -0.5, 0.0, 0.5, 1.0, 2.0, 3.0]
+
+    _, biner = cv2.threshold(
+        area, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
+    )
+    tinggi, lebar = biner.shape[:2]
+    pusat = (lebar / 2.0, tinggi / 2.0)
+
+    terbaik, skor_terbaik = None, -1.0
+    for sudut in kandidat:
+        m = cv2.getRotationMatrix2D(pusat, sudut, 1.0)
+        putar = cv2.warpAffine(
+            biner, m, (lebar, tinggi),
+            flags=cv2.INTER_NEAREST,
+            borderMode=cv2.BORDER_CONSTANT, borderValue=0,
+        )
+        # Ambil bagian tengah agar tepi hasil rotasi tidak ikut dihitung.
+        inti = putar[int(0.1 * tinggi):int(0.9 * tinggi),
+                     int(0.1 * lebar):int(0.9 * lebar)]
+        profil = np.count_nonzero(inti, axis=1).astype(np.float64)
+        skor = float(np.var(profil))
+        if skor > skor_terbaik:
+            skor_terbaik, terbaik = skor, sudut
+    return terbaik
 
 
 def _kotak_dari_mask(mask, luas):
@@ -152,6 +290,7 @@ def crop_dan_luruskan(gambar):
     tinggi, lebar = gambar.shape[:2]
     det = deteksi_batas_kertas(gambar)
     kotak = det["kotak"]
+    cara = det.get("cara")
 
     if kotak is None:
         return {
@@ -164,9 +303,37 @@ def crop_dan_luruskan(gambar):
                      + det["pesan"],
         }
 
-    kotak = _longgarkan(kotak, gambar)
-    w_target, h_target = _ukuran_target(kotak)
+    # Margin lebih longgar bila kotak berasal dari isi nota, supaya tepi
+    # kertas dan elemen tepi (logo, tanda tangan) tidak terpotong.
+    faktor = 0.06 if cara == "isi" else 0.01
+    kotak = _longgarkan(kotak, gambar, faktor)
+    if cara == "isi":
+        # Batas isi hanya dipakai untuk memotong dan membersihkan latar;
+        # cetak tidak diputar agar posisi baris tetap sama dengan yang
+        # diharapkan oleh deteksi field.
+        x_min = int(max(0, np.floor(kotak[:, 0].min())))
+        y_min = int(max(0, np.floor(kotak[:, 1].min())))
+        x_max = int(min(lebar, np.ceil(kotak[:, 0].max())))
+        y_max = int(min(tinggi, np.ceil(kotak[:, 1].max())))
+        kanvas = gambar.copy()
+        kanvas[:y_min, :] = 255
+        kanvas[y_max:, :] = 255
+        kanvas[:, :x_min] = 255
+        kanvas[:, x_max:] = 255
+        return {
+            "gambar": kanvas,
+            "crop": kanvas[y_min:y_max, x_min:x_max].copy(),
+            "bbox": (x_min, y_min, x_max, y_max),
+            "kotak": kotak,
+            "status": "crop_saja",
+            "pesan": (
+                "Area isi nota dipotong dan latar di luarnya diganti putih; "
+                "cetak tidak diputar agar posisi baris tetap konsisten."
+            ),
+        }
 
+
+    w_target, h_target = _ukuran_target(kotak)
     # Penjagaan agar isi nota tidak hilang: hasil warp harus masuk akal
     # ukurannya dibanding gambar sumber.
     if (
