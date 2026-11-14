@@ -21,6 +21,8 @@ SKALA = 3
 # "ln", atau "GI" lebarnya hanya ~1.1-1.2 x tinggi huruf, sehingga
 # lolos dari pemisahan dan keluar sebagai satu kotak bertanda '?'.
 # Nilai 1.10 dipilih dari pengujian: CER terbaik pada rentang 1.08-1.12.
+# Pasangan yang lebih sempit dari ini (mis. "in" 1.03, "ei" 1.07) tetap
+# ditangani oleh aturan "label mustahil" di _rapikan_gabung_pecah().
 AMBANG_LEBAR_KOMPONEN = 1.10
 
 
@@ -49,6 +51,29 @@ def simpan_gambar(path, gambar):
 # =========================================
 # PREPROCESSING
 # =========================================
+
+def crop_tanpa_teks(gambar):
+    """
+    Deteksi crop yang tidak memuat tinta teks (kosong, pudar, atau hanya
+    bayangan/gradasi).
+
+    Pada crop seperti ini Otsu akan mengubah gradasi latar menjadi blob
+    raksasa yang menyerupai karakter, sehingga muncul kotak-kotak palsu
+    yang tampak seperti beberapa karakter tergabung. Ciri yang dipakai
+    bersifat umum dan tidak bergantung pada satu nota tertentu:
+      - tidak ada piksel gelap sama sekali (tinta teks selalu gelap), dan
+      - variasi intensitas sangat kecil (gambar hampir seragam).
+
+    Crop teks sungguhan pada nota proyek ini memiliki piksel gelap
+    (min < 100) dan simpangan baku > 70.
+    """
+    if gambar is None or getattr(gambar, "size", 0) == 0:
+        return True
+    abu = gambar if gambar.ndim == 2 else cv2.cvtColor(
+        gambar, cv2.COLOR_BGR2GRAY
+    )
+    return bool(float(abu.min()) > 140 and float(abu.std()) < 25.0)
+
 
 def binarisasi(gambar):
     abu = cv2.cvtColor(
@@ -145,6 +170,8 @@ def calon_batas(blob, tinggi_acuan):
 
     # 1) Kolom tanpa tinta = celah pasti antar karakter. Titik tengah
     #    setiap celah dijadikan batas agar huruf terpisah tidak menyatu.
+    #    Celah selebar SATU kolom juga dihitung: pada huruf yang hampir
+    #    menempel, pemisahnya sering hanya satu kolom kosong.
     kolom_kosong = proyeksi == 0
     i = 0
     while i < w:
@@ -152,19 +179,27 @@ def calon_batas(blob, tinggi_acuan):
             j = i
             while j < w and kolom_kosong[j]:
                 j += 1
-            if (j - i) >= 2:
+            if (j - i) >= 1 and 0 < i and j < w:
                 batas.add((i + j) // 2)
             i = j
         else:
             i += 1
 
     # 2) Lembah proyeksi lokal untuk huruf yang benar-benar menempel.
-    ambang = np.percentile(halus, 30)
+    #
+    #    PENTING: pencarian lembah memakai proyeksi MENTAH, bukan yang
+    #    sudah dihaluskan. Penghalusan jendela-3 menggeser dan menutupi
+    #    lembah sempit. Contoh nyata pada "ei" yang menempel:
+    #        proyeksi mentah : ... 2, 1, 3 ...  -> minimum jelas di tengah
+    #        setelah halus   : ... 1.67, 2.0, 5.67 ... -> minimum hilang
+    #    Karena itu titik potong yang benar tidak pernah ditawarkan ke DP
+    #    dan dua huruf tetap menyatu.
+    ambang = np.percentile(proyeksi, 30)
     for p in range(1, w - 1):
         if (
-            halus[p] <= halus[p - 1]
-            and halus[p] <= halus[p + 1]
-            and halus[p] <= ambang
+            proyeksi[p] <= proyeksi[p - 1]
+            and proyeksi[p] <= proyeksi[p + 1]
+            and proyeksi[p] <= ambang
         ):
             batas.add(p)
 
@@ -198,9 +233,23 @@ def skor_potongan(
         int(0.10 * tinggi_acuan)
     )
 
+    # Batas lebar maksimum untuk SATU karakter.
+    #
+    # Sebelumnya 0.95 x tinggi huruf. Nilai itu terlalu sempit sehingga
+    # huruf yang memang lebar seperti 'M', 'm', 'W' (rasio lebar/tinggi
+    # sekitar 1.0-1.3) tidak pernah dianggap sebagai SATU karakter dan
+    # selalu dipaksa dipecah menjadi potongan-potongan yang lebih sempit.
+    # Akibatnya 'M' pecah menjadi 'N'+'I' (PAMA -> PANIA, Muat -> NIuat)
+    # dan 'm' pecah menjadi 'r'+'n' (Cm -> Crn). Gumpalan dua karakter
+    # seperti 'MA' (rasio ~2.1) bahkan dipaksa menjadi TIGA potongan
+    # karena dua potongan selebar ~1 x tinggi pun melebihi 0.95.
+    #
+    # Batas 1.60 memberi ruang bagi huruf lebar tetap utuh, tetapi
+    # potongan yang janggal tetap kena penalti lebar di bawah sehingga
+    # pasangan huruf yang menempel (mis. 'va', 'ln') masih dipecah.
     max_w = max(
         min_w + 1,
-        int(0.95 * tinggi_acuan)
+        int(1.60 * tinggi_acuan)
     )
 
     for i in range(len(batas) - 1):
@@ -282,12 +331,22 @@ def skor_potongan(
         )
 
         # Penalti tambahan bila potongan jauh lebih lebar dari satu karakter.
+        # Koefisien 0.8 lama terlalu keras: huruf yang memang lebar seperti
+        # 'M', 'm', 'W' (rasio 1.0-1.3) kena penalti besar sehingga DP lebih
+        # suka memecahnya menjadi dua potongan sempit ('M' -> 'N'+'I').
+        # Koefisien 0.30 cukup untuk tetap menghukum gumpalan dua karakter,
+        # tetapi tidak lagi menghukum huruf lebar tunggal.
         if panjang > 0.85 * tinggi_acuan:
-            nilai -= 0.8 * (panjang / max(tinggi_acuan, 1) - 0.85)
+            nilai -= 0.30 * (panjang / max(tinggi_acuan, 1) - 0.85)
 
-        # Bonus kecil jika prediksi sama.
+        # Bonus kecil jika prediksi CNN dan Template Matching sepakat.
+        # Bonus per karakter dulu 0.12. Nilai itu membuat jalur yang
+        # memecah satu huruf lebar menjadi DUA potongan (mis. 'M' ->
+        # 'N'+'I') mendapat bonus dua kali dan menang tipis atas jalur
+        # 'M' utuh. Bonus 0.06 mengurangi bias fragmentasi itu sambil
+        # tetap menghargai kesepakatan CNN + Template Matching.
         if labels[c] == label_tm[t]:
-            nilai += 0.12
+            nilai += 0.06
 
         skor[(i, j)] = (
             nilai,
@@ -403,6 +462,181 @@ def _pecah_lebar(blob, a, b, char_w, model, labels, templates, label_tm,
     return kiri + kanan
 
 
+def _rapikan_gabung_pecah(hasil, biner, tinggi_acuan,
+                          model, labels, templates, label_tm):
+    """
+    Perbaikan akhir atas hasil dynamic programming.
+
+    DP kadang terlalu kasar pada gumpalan beberapa karakter:
+      (A) satu karakter berongga (mis. 'O', 'Q') terpotong menjadi dua
+          busur sempit ('(' + ')'), atau
+      (B) dua karakter menempel (mis. 'GI') dibiarkan menjadi satu kotak
+          lebar yang dikenali salah.
+
+    Kedua kasus diperbaiki BERBASIS KEYAKINAN CNN, bukan sekadar lebar:
+      (A) dua segmen sempit yang bersebelahan tanpa celah digabung kembali
+          HANYA bila potongan gabungannya dikenali lebih yakin daripada
+          kedua bagiannya;
+      (B) satu segmen lebar dengan keyakinan rendah dipecah di lembah
+          proyeksi HANYA bila kedua belahannya dikenali lebih yakin.
+    Dengan gerbang keyakinan ini karakter sah (mis. 'M' utuh, atau 'i'+'l'
+    yang memang dua karakter) tidak ikut berubah.
+    """
+    if not hasil or biner is None:
+        return hasil
+
+    H, W = biner.shape[:2]
+    ta = max(tinggi_acuan, 1.0)
+    hasil = sorted(hasil, key=lambda z: (z["x1"], z["y1"]))
+
+    def prediksi(x1, y1, x2, y2):
+        if x2 <= x1 or y2 <= y1:
+            return None
+        pot = biner[max(0, y1):min(H, y2), max(0, x1):min(W, x2)]
+        return _prediksi_potongan(pot, model, labels, templates, label_tm)
+
+    # (A) Gabungkan kembali pasangan sempit yang sebenarnya satu karakter.
+    #
+    # Kasus nyata: 'O' pada "KSO" terbelah menjadi 'K' + ')' (pc 0.97 dan
+    # 1.00). CNN sangat yakin pada busur, sehingga dua busur selalu terlihat
+    # "benar" padahal masih satu huruf. Karena itu penggabungan TIDAK
+    # memakai keyakinan busur sebagai pembanding, melainkan mensyaratkan
+    # hasil gabungannya berupa huruf bulat/tertutup yang wajar.
+    busur = {"(", ")", "[", "]", "C", "c", "K", "G", "0", "O", "o", "Q"}
+    huruf_bulat = {"O", "o", "0", "Q", "D", "C", "G", "c", "e", "a", "U"}
+    gabung = []
+    i = 0
+    while i < len(hasil):
+        cur = dict(hasil[i])
+        if i + 1 < len(hasil):
+            nxt = hasil[i + 1]
+            w_cur = cur["x2"] - cur["x1"]
+            w_nxt = nxt["x2"] - nxt["x1"]
+            celah = nxt["x1"] - cur["x2"]
+            lebar_gabung = w_cur + w_nxt + celah
+            if (
+                celah <= 1
+                and w_cur < 0.60 * ta
+                and w_nxt < 0.60 * ta
+                and lebar_gabung <= 1.15 * ta
+                and cur.get("cnn") in busur
+                and nxt.get("cnn") in busur
+            ):
+                y1 = min(cur["y1"], nxt["y1"])
+                y2 = max(cur["y2"], nxt["y2"])
+                merged = prediksi(cur["x1"], y1, nxt["x2"], y2)
+                if merged is not None:
+                    c, t, pc, pt = merged
+                    if pc >= 0.55 and c in huruf_bulat:
+                        cur = {
+                            "x1": cur["x1"], "y1": y1,
+                            "x2": nxt["x2"], "y2": y2,
+                            "cnn": c, "tm": t, "pc": pc, "pt": pt,
+                            "status": "KANDIDAT",
+                        }
+                        gabung.append(cur)
+                        i += 2
+                        continue
+        gabung.append(cur)
+        i += 1
+    hasil = gabung
+
+    # (B) Pecah segmen yang menampung dua karakter.
+    #
+    # Dua pemicu:
+    #   1. lebar > 1.05 x tinggi DAN hasilnya ragu / CNN-TM tidak sepakat
+    #      (mis. 'GI' terbaca 'a');
+    #   2. label yang terbaca MUSTAHIL selebar itu. Contoh nyata: "in"
+    #      (lebar 1.03 x tinggi) terbaca '.' dengan pc 0.90, dan "ei"
+    #      (1.07 x tinggi) terbaca '-' — titik dan strip tidak mungkin
+    #      selebar satu huruf penuh, jadi pasti dua karakter menempel.
+    #      Tanpa aturan ini, keyakinan model yang keliru membuat
+    #      penggabungan tetap dipertahankan.
+    sempit_mustahil = {
+        ".", ",", "'", '"', "`", ":", ";", "!", "|",
+        "i", "l", "1", "I", "j", "-", "~", "_",
+    }
+    pecah = []
+    for s in hasil:
+        w = s["x2"] - s["x1"]
+        ragu = s.get("pc", 0.0) < 0.9 or s.get("tm") != s.get("cnn")
+        lebar_ragu = w > 1.05 * ta and ragu
+        label_mustahil = (
+            s.get("cnn") in sempit_mustahil and w > 0.75 * ta
+        )
+        if lebar_ragu or label_mustahil:
+            pot = biner[max(0, s["y1"]):min(H, s["y2"]),
+                        max(0, s["x1"]):min(W, s["x2"])]
+            proyeksi = np.count_nonzero(pot, axis=0).astype(np.float32)
+            tengah = w // 2
+            lo = max(1, tengah - int(0.35 * w))
+            hi = min(w - 1, tengah + int(0.35 * w))
+            if hi > lo:
+                # Titik potong utama = lembah tinta (paling sedikit tinta).
+                # Titik ini yang paling masuk akal secara bentuk.
+                pos_min = lo + int(np.argmin(proyeksi[lo:hi]))
+
+                def nilai_split(pos):
+                    if pos < 1 or pos >= w:
+                        return None
+                    kiri = prediksi(
+                        s["x1"], s["y1"], s["x1"] + pos, s["y2"]
+                    )
+                    kanan = prediksi(
+                        s["x1"] + pos, s["y1"], s["x2"], s["y2"]
+                    )
+                    if kiri is None or kanan is None:
+                        return None
+                    return (min(kiri[2], kanan[2]), pos, kiri, kanan)
+
+                terbaik = nilai_split(pos_min)
+
+                # Bila lembah tinta TIDAK menghasilkan dua bagian yang
+                # meyakinkan, cari beberapa titik lain di sekitar lembah.
+                # Contoh nyata pada "ei" yang menempel: lembah tinta ada di
+                # posisi yang salah ('e' + ',' keyakinan 0.58), sedangkan
+                # titik potong benar ('e' + 'i', keyakinan 1.00 dan 0.98)
+                # berada beberapa piksel di kanannya.
+                #
+                # Jumlah kandidat dibatasi agar proses tetap cepat: hanya
+                # 5 titik yang diuji, dan pencarian hanya dilakukan bila
+                # titik lembah memang meragukan.
+                perlu_cari = terbaik is None or terbaik[0] < 0.70
+                if perlu_cari and hi > lo:
+                    jumlah_coba = 5
+                    for k in range(1, jumlah_coba + 1):
+                        pos = lo + round((hi - lo) * k / (jumlah_coba + 1))
+                        calon = nilai_split(pos)
+                        if calon is None:
+                            continue
+                        if terbaik is None or calon[0] > terbaik[0]:
+                            terbaik = calon
+
+                if terbaik is not None:
+                    skor, pos, kiri, kanan = terbaik
+                    yakin_lebih_baik = skor > s.get("pc", 0.0)
+                    # Untuk label yang mustahil, kedua bagian harus wajar
+                    # (>= 0.80) karena label lama tidak bisa dipakai sebagai
+                    # pembanding. Ambang ini mencegah potongan asal-asalan
+                    # (mis. "in" terpotong menjadi 'k' + 'I' dengan 0.79).
+                    wajar = label_mustahil and skor >= 0.80
+                    if yakin_lebih_baik or wajar:
+                        for seg, pr in ((0, kiri), (pos, kanan)):
+                            c, t, pc, pt = pr
+                            x1 = s["x1"] + seg
+                            x2 = s["x1"] + pos if seg == 0 else s["x2"]
+                            pecah.append({
+                                "x1": x1, "y1": s["y1"],
+                                "x2": x2, "y2": s["y2"],
+                                "cnn": c, "tm": t, "pc": pc, "pt": pt,
+                                "status": "KANDIDAT",
+                            })
+                        continue
+        pecah.append(s)
+    hasil = sorted(pecah, key=lambda z: (z["x1"], z["y1"]))
+    return hasil
+
+
 def segmentasi_karakter_tm(gambar, model, labels, templates, label_tm):
     """
     Alur utama sesuai metode penelitian:
@@ -498,6 +732,12 @@ def segmentasi_karakter(
         templates, label_tm = muat_templates()
 
     biner = binarisasi(gambar)
+
+    # Crop kosong/pudar tidak boleh diproses: Otsu akan mengubah gradasi
+    # latar menjadi blob raksasa yang tampak seperti karakter tergabung.
+    if crop_tanpa_teks(gambar):
+        return biner, []
+
     komponen = deteksi_komponen(biner)
 
     if not komponen:
@@ -579,8 +819,8 @@ def segmentasi_karakter(
             batas = [0, w]
 
         # Objek yang jauh lebih lebar dari satu karakter pasti berisi
-        # beberapa karakter, jadi penalti per-karakter diturunkan agar
-        # DP cenderung memisahkan (bukan menggabung).
+        # beberapa karakter. Penalti per-karakter diturunkan untuk blob
+        # lebar agar DP rela memecah gumpalan menjadi beberapa karakter.
         rasio_lebar = w / max(tinggi_acuan, 1.0)
         if rasio_lebar > 1.5:
             penalti_blob = 0.15
@@ -648,12 +888,16 @@ def segmentasi_karakter(
 
         for a, b, info in potong:
             # Pecah lagi hanya bila segmen memang cukup lebar untuk memuat
-            # lebih dari satu karakter. Syarat tinggi menjaga agar huruf
-            # tunggal lebar (mis. 'P', 'M') tidak ikut terpecah.
+            # lebih dari satu karakter. Syarat lebar dijaga agar huruf
+            # tunggal yang memang lebar (mis. 'M', 'm', 'W') tidak ikut
+            # terpecah menjadi dua potongan. Ambang 1.15 dulu terlalu
+            # rendah: 'M' (rasio ~1.24) masih dianggap "cukup lebar" dan
+            # dipaksa pecah jadi 'N'+'I'. Ambang 1.40 melindungi huruf
+            # lebar tunggal tetapi tetap memecah sisa gumpalan dua karakter.
             lebar_seg = b - a
             cukup_lebar = (
                 lebar_seg > 1.45 * char_w_est
-                and lebar_seg > 1.15 * tinggi_acuan
+                and lebar_seg > 1.40 * tinggi_acuan
             )
 
             if cukup_lebar:
@@ -685,6 +929,16 @@ def segmentasi_karakter(
             z["y1"]
         )
     )
+
+    # Perbaikan akhir: gabung kembali karakter yang terpotong dua dan
+    # pecah gumpalan dua karakter yang lolos, berbasis keyakinan CNN.
+    try:
+        hasil = _rapikan_gabung_pecah(
+            hasil, biner, tinggi_acuan,
+            model, labels, templates, label_tm
+        )
+    except Exception:
+        pass
 
     # Buang sisa tanda baca label (mis. ':') di awal/akhir field.
     try:

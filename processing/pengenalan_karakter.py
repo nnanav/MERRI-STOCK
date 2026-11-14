@@ -2,11 +2,19 @@
 from pathlib import Path
 from functools import lru_cache
 import json
+import os
 import sys
 
 import cv2
 import numpy as np
-import tensorflow as tf
+
+# Kurangi noise log TensorFlow. Batas thread TIDAK dipaksa ke 1 karena
+# membuat inferensi per karakter sangat lambat (pengenalan satu nota bisa
+# memakan beberapa menit). Kebutuhan memori sudah ditekan dengan tidak
+# lagi menyimpan citra biner/visual yang tidak terpakai.
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+
+import tensorflow as tf  # noqa: E402
 
 from processing.dataset_loader import (
     daftar_folder_kelas,

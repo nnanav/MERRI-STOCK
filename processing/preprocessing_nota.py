@@ -546,6 +546,7 @@ def preprocess_nota(gambar):
         hasil = potong["gambar"]
         crop_tampil = crop_base
         tampil = hasil
+        trim_tampil = (0, 0, 0, 0)
     else:
         x_min, y_min, x_max, y_max = bbox
         kertas = tingkatkan_kualitas(crop_base)
@@ -560,13 +561,21 @@ def preprocess_nota(gambar):
         # Gambar untuk tampilan: crop ketat yang dirapikan tepinya saja.
         # Tidak ada piksel isi yang diubah/dihapus.
         crop_tampil = _trim_latar(crop_base)[0]
-        tampil = _trim_latar(kertas)[0]
+        tampil, trim_tampil = _trim_latar(kertas)
 
     return {
-        "asli": gambar.copy(),
+        # "asli" hanya ditampilkan (tidak diubah), jadi cukup rujuk gambar
+        # masukan tanpa menyalin. Menyalin citra penuh per nota membebani
+        # memori pada mesin ber-RAM kecil.
+        "asli": gambar,
         "crop": crop_tampil,
         "hasil": hasil,
         "tampil": tampil,
+        # Posisi kertas pada kanvas asli + offset pemangkasan latar pada
+        # gambar tampil; dipakai halaman Segmentasi untuk memetakan kotak
+        # field (ruang kanvas) ke ruang gambar tampil.
+        "bbox_kertas": bbox,
+        "trim_tampil": trim_tampil,
         "kotak": potong["kotak"],
         "status": potong["status"],
         "pesan": potong["pesan"],

@@ -19,10 +19,10 @@ Buka browser pada alamat yang ditampilkan (biasanya http://localhost:8501).
 
 1. **Business Understanding** - penjelasan sistem, data, dan metode
 2. **Upload Nota** - unggah gambar nota, lalu klik **Proses Nota**
-3. **Preprocessing** - lihat mask merah nomor nota dan tahapan pengolahan
+3. **Preprocessing** - crop kertas nota, peningkatan kualitas, dan binerisasi
 4. **Segmentasi** - bounding box per field dan pemisahan per karakter
 5. **Pengenalan** - hasil OCR semua field
-6. **Evaluasi** - isi ground truth, CER dihitung otomatis
+6. **Evaluasi** - CER per field utuh terhadap ground truth (status exact match)
 
 ## Struktur Folder
 
@@ -76,7 +76,11 @@ Hasil pelatihan disimpan ke `models/cnn_karakter.keras` dan `models/labels.json`
 python tests/uji_app_streamlit.py     # cek 6 halaman dashboard
 python tests/uji_info_dataset.py      # cek konsistensi angka data latih
 python tests/uji_integrasi_segmen.py  # cek alur upload sampai evaluasi
-python tests/ukur_cer.py              # ukur CER terhadap ground truth
+python tests/ukur_cer.py              # evaluasi CER per field vs ground truth
+python tests/uji_upload.py            # cek jalur upload (decode gambar + OCR)
+python tests/uji_halaman_berisi.py    # render halaman dengan nota nyata
+python tests/audit_segmentasi.py      # cek karakter tergabung/terpotong (16 nota)
+python tests/audit_generalisasi.py    # cek kewajaran hasil pada nota baru
 python tests/sapu_ambang.py           # bandingkan ambang lebar komponen
 python tests/diag_segmen.py           # rincian segmen per field
 ```
@@ -88,3 +92,8 @@ python tests/diag_segmen.py           # rincian segmen per field
   dan `dataset/simbol`.
 - Folder `archive/` berisi backup kode dan model versi sebelumnya; tidak dipakai
   saat aplikasi berjalan dan aman untuk diabaikan.
+- **Memori.** TensorFlow + model CNN membutuhkan sekitar 0,5 GB RAM. Pada mesin
+  ber-RAM kecil (mis. 4 GB), jalankan hanya SATU server Streamlit dan tutup
+  aplikasi lain. Bila muncul pesan `Insufficient memory` dari OpenCV, artinya
+  memori sistem habis (bukan kesalahan kode): hentikan server lain lebih dulu
+  (`Get-Process python,streamlit | Stop-Process`), lalu jalankan ulang.

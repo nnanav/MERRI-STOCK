@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import gc
+
 import cv2
 import numpy as np
 import streamlit as st
@@ -80,6 +82,87 @@ def hitung_cer(gt, pred):
             ))
         sebelumnya = sekarang
     return sebelumnya[-1] / len(gt)
+
+
+def normalisasi_teks(teks):
+    """
+    Normalisasi ringan dan konsisten untuk ground truth maupun hasil OCR.
+
+    Hanya spasi yang dirapikan (spasi berlebih menjadi satu, spasi tepi
+    dibuang). Huruf, angka, dan tanda baca TIDAK diubah, sehingga
+    perbedaan seperti "Pcs" vs "PCS" atau titik pada "39.000" tetap
+    terhitung sebagai kesalahan.
+    """
+    return " ".join(str(teks or "").split())
+
+
+def hitung_cer_rinci(gt, pred):
+    """
+    Hitung CER satu field secara utuh beserta rincian operasi edit.
+
+    CER = (S + D + I) / N, dengan
+      S = substitution (karakter ground truth diganti karakter lain)
+      D = deletion     (karakter ground truth hilang pada hasil OCR)
+      I = insertion    (karakter tambahan pada hasil OCR)
+      N = jumlah karakter ground truth
+
+    CER adalah satu-satunya metrik evaluasi (tidak ada similarity).
+
+    Mengembalikan dict: n, s, d, i, jarak, cer, sama.
+    `cer` berupa pecahan 0..1, atau None bila ground truth kosong
+    (tidak ada pembagi sehingga tidak terjadi pembagian dengan nol).
+    """
+    gt = normalisasi_teks(gt)
+    pred = normalisasi_teks(pred)
+    n = len(gt)
+    m = len(pred)
+
+    if n == 0:
+        return {
+            "n": 0, "s": 0, "d": 0, "i": 0, "jarak": m,
+            "cer": None, "sama": gt == pred,
+        }
+
+    # Matriks jarak edit (Levenshtein).
+    dp = [[0] * (m + 1) for _ in range(n + 1)]
+    for a in range(n + 1):
+        dp[a][0] = a
+    for b in range(m + 1):
+        dp[0][b] = b
+    for a in range(1, n + 1):
+        for b in range(1, m + 1):
+            biaya = 0 if gt[a - 1] == pred[b - 1] else 1
+            dp[a][b] = min(
+                dp[a - 1][b - 1] + biaya,  # cocok / substitusi
+                dp[a - 1][b] + 1,          # deletion
+                dp[a][b - 1] + 1,          # insertion
+            )
+
+    # Telusuri balik untuk memisahkan S, D, dan I.
+    sub = dele = ins = 0
+    a, b = n, m
+    while a > 0 or b > 0:
+        if (a > 0 and b > 0 and gt[a - 1] == pred[b - 1]
+                and dp[a][b] == dp[a - 1][b - 1]):
+            a -= 1
+            b -= 1
+        elif a > 0 and b > 0 and dp[a][b] == dp[a - 1][b - 1] + 1:
+            sub += 1
+            a -= 1
+            b -= 1
+        elif a > 0 and dp[a][b] == dp[a - 1][b] + 1:
+            dele += 1
+            a -= 1
+        else:
+            ins += 1
+            b -= 1
+
+    jarak = sub + dele + ins
+    cer = jarak / n
+    return {
+        "n": n, "s": sub, "d": dele, "i": ins, "jarak": jarak,
+        "cer": cer, "sama": jarak == 0,
+    }
 
 
 @st.cache_resource
@@ -221,7 +304,7 @@ def jalankan_deteksi(gambar_bgr):
     gambar_bgr = preproses["hasil"]
 
     # Deteksi lima field. Koordinat di ruang gambar yang lebarnya 1400.
-    kecil, biner, visual, kotak = deteksi_baris(gambar_bgr)
+    kecil, _, _, kotak = deteksi_baris(gambar_bgr)
     H, W = kecil.shape[:2]
 
     # Crop untuk OCR diambil dari gambar asli, bukan dari gambar proses
@@ -373,17 +456,23 @@ def jalankan_deteksi(gambar_bgr):
             harga[i - 1] if i - 1 < len(harga) else None,
         ))
 
+    # "biner" dan "visual" dari deteksi_baris tidak disimpan: keduanya tidak
+    # dipakai halaman mana pun dan hanya membebani memori. Pada mesin ber-RAM
+    # kecil, menyimpan citra tambahan per nota bisa memicu kegagalan alokasi
+    # OpenCV pada tahap berikutnya.
     return {
-        "kecil": kecil, "biner": biner, "visual": visual,
+        "kecil": kecil,
         "kandidat": kandidat, "nomor": nomor,
         "produk": produk, "fields": fields,
         "preproses": preproses,
     }
 
 
-def gambar_kotak_field(kecil, fields):
-    # Gambar bounding box tiap field di atas nota.
-    vis = kecil.copy()
+def gambar_kotak_field(base, fields, skala=1.0, ox=0.0, oy=0.0):
+    # Gambar bounding box tiap field di atas citra `base`.
+    # Kotak field disimpan dalam ruang pemrosesan (lebar 1400); parameter
+    # skala/ox/oy memetakannya ke ruang citra `base` bila berbeda.
+    vis = base.copy()
     warna = {
         "nomor": (0, 0, 255),
         "penerima": (0, 140, 255),
@@ -393,11 +482,19 @@ def gambar_kotak_field(kecil, fields):
         "satuan": (0, 200, 200),
         "harga": (180, 0, 180),
     }
+    H, W = vis.shape[:2]
     for f in fields:
         bb = f.get("bbox")
         if not bb:
             continue
-        x1, y1, x2, y2 = [int(v) for v in bb]
+        x1 = int(round(int(bb[0]) / skala - ox))
+        y1 = int(round(int(bb[1]) / skala - oy))
+        x2 = int(round(int(bb[2]) / skala - ox))
+        y2 = int(round(int(bb[3]) / skala - oy))
+        x1 = max(0, min(W - 1, x1)); x2 = max(0, min(W - 1, x2))
+        y1 = max(0, min(H - 1, y1)); y2 = max(0, min(H - 1, y2))
+        if x2 <= x1 or y2 <= y1:
+            continue
         c = warna.get(f["jenis"], (0, 0, 0))
         cv2.rectangle(vis, (x1, y1), (x2, y2), c, 2)
         cv2.putText(vis, f["label"], (x1, max(12, y1 - 4)),
@@ -440,13 +537,13 @@ def segmen_field(crop, jenis=None):
         # ke ukuran crop asli agar kotak pas.
         h, w = cimg.shape[:2]
         karakter = []
-        for s in hasil:
+        for s, fin in zip(hasil, final):
             karakter.append({
                 "x1": int(s["x1"] / SKALA), "y1": int(s["y1"] / SKALA),
                 "x2": min(w, int(s["x2"] / SKALA)),
                 "y2": min(h, int(s["y2"] / SKALA)),
                 "cnn": s.get("cnn", ""), "tm": s.get("tm", ""),
-                "final": s.get("final", ""),
+                "final": fin.get("final", ""),
             })
         biner_tampil = cv2.resize(
             biner, (w, h), interpolation=cv2.INTER_AREA
@@ -475,18 +572,53 @@ def halaman_upload():
     )
 
     if berkas is not None:
-        data = np.frombuffer(berkas.getvalue(), np.uint8)
-        gambar_baru = cv2.imdecode(data, cv2.IMREAD_COLOR)
-        if gambar_baru is None:
-            st.error("Gambar gagal dibaca. Coba berkas lain.")
-            return
-        if st.session_state.get("nama_file") != berkas.name:
-            st.session_state["nama_file"] = berkas.name
-            st.session_state["gambar_bgr"] = gambar_baru
+        baru = st.session_state.get("nama_file") != berkas.name
+        if baru:
+            # Kosongkan hasil nota sebelumnya LEBIH DULU agar memori lega
+            # sebelum gambar baru didekode. Pada mesin ber-RAM kecil,
+            # menyimpan nota lama + mendekode nota baru sekaligus bisa
+            # membuat OpenCV gagal alokasi ("Insufficient memory").
             st.session_state["deteksi"] = None
             st.session_state["ocr_semua"] = None
             st.session_state["ocr_kunci"] = None
             st.session_state["preproses"] = None
+            st.session_state["gambar_bgr"] = None
+            gc.collect()
+
+        gambar_baru = None
+        data = None
+        try:
+            data = np.frombuffer(berkas.getvalue(), np.uint8)
+            gambar_baru = cv2.imdecode(data, cv2.IMREAD_COLOR)
+        except cv2.error as galat:
+            st.error(
+                "Gambar gagal didekode karena memori komputer tidak cukup. "
+                "Tutup aplikasi lain (mis. tab browser atau editor) lalu "
+                "unggah ulang nota. Detail: " + str(galat).splitlines()[0]
+            )
+            return
+        except MemoryError:
+            st.error(
+                "Memori komputer habis saat membaca gambar. Tutup aplikasi "
+                "lain lalu unggah ulang nota."
+            )
+            return
+        except Exception as galat:  # jaring pengaman: jangan tampilkan traceback
+            st.error(
+                "Berkas gagal dibaca. Pastikan berkas berupa gambar JPG/PNG "
+                f"yang utuh. Detail: {type(galat).__name__}: {galat}"
+            )
+            return
+        finally:
+            data = None
+            gc.collect()
+
+        if gambar_baru is None:
+            st.error("Gambar gagal dibaca. Coba berkas lain.")
+            return
+        if baru:
+            st.session_state["nama_file"] = berkas.name
+            st.session_state["gambar_bgr"] = gambar_baru
 
     gambar = st.session_state.get("gambar_bgr")
     nama = st.session_state.get("nama_file")
@@ -530,45 +662,24 @@ def halaman_preprocessing():
     tampil = pp.get("tampil", hasil)
 
     st.subheader("1. Crop dan koreksi perspektif")
-    st.caption(pp["pesan"])
     a, b = st.columns(2)
     a.image(gambar_rgb(pp["asli"]), caption="Nota asli", width="stretch")
     b.image(gambar_rgb(pp["crop"]), caption="Hasil crop kertas nota",
             width="stretch")
 
     st.subheader("2. Peningkatan kualitas gambar")
-    st.caption(
-        f"Metode terpilih: {pp['metode']} pada kanal luminansi. Rentang "
-        "intensitas kertas direntangkan sehingga tulisan yang tipis lebih "
-        "terpisah dari latar, tanpa mengubah warna dan tanpa menambah "
-        "kontras tekstur kertas. Metode diterapkan pada area kertas yang "
-        "terdeteksi; bila batas kertas tidak ditemukan, gambar dipakai apa "
-        "adanya (fallback)."
-    )
+    st.caption(f"Metode yang dipakai: {pp['metode']}.")
     st.image(gambar_rgb(tampil), caption="Hasil akhir preprocessing",
              width="stretch")
-    st.caption(
-        "Gambar di atas adalah area nota setelah dipotong dan ditingkatkan. "
-        "Pada tahap berikutnya isi yang sama dipakai pada kanvas berukuran "
-        "asli dengan latar putih, agar posisi baris tetap stabil untuk "
-        "deteksi field."
-    )
-    st.caption(
-        "Deteksi nomor nota (mask merah) bukan bagian preprocessing; "
-        "tampilannya ada pada halaman Segmentasi bersama hasil deteksi field."
-    )
 
-    with st.expander("Binerisasi (grayscale + Otsu)"):
-        abu = cv2.cvtColor(tampil, cv2.COLOR_BGR2GRAY)
-        _, otsu = cv2.threshold(
-            abu, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
-        )
-        st.image(abu, caption="Grayscale", width="stretch")
-        st.image(otsu, caption="Binarisasi Otsu", width="stretch")
-        st.caption(
-            "Grayscale dan binerisasi Otsu termasuk tahap preprocessing; "
-            "hasilnya dipakai tahap segmentasi karakter."
-        )
+    st.subheader("3. Binerisasi")
+    abu = cv2.cvtColor(tampil, cv2.COLOR_BGR2GRAY)
+    _, otsu = cv2.threshold(
+        abu, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
+    )
+    c1, c2 = st.columns(2)
+    c1.image(abu, caption="Grayscale", width="stretch")
+    c2.image(otsu, caption="Binarisasi Otsu", width="stretch")
 
 
 def halaman_segmentasi():
@@ -608,8 +719,30 @@ def halaman_segmentasi():
 
     st.subheader("Bounding box tiap field")
     st.caption("Setiap kotak menandai lokasi satu field pada nota.")
-    st.image(gambar_rgb(gambar_kotak_field(det["kecil"], det["fields"])),
-             use_container_width=True)
+    # Tampilkan kotak di atas gambar HASIL PREPROCESSING (crop rapat yang
+    # sudah ditingkatkan), bukan kanvas penuh berlatar. Koordinat kotak
+    # (ruang pemrosesan lebar 1400) dipetakan ke ruang gambar tampil.
+    pp_det = det.get("preproses", {})
+    tampil_det = pp_det.get("tampil")
+    # Butuh "bbox_kertas" (dict preprocessing versi baru) agar pemetaan
+    # koordinat pasti benar; sesi lama tanpa kunci ini memakai fallback.
+    if ("bbox_kertas" in pp_det and tampil_det is not None
+            and pp_det.get("hasil") is not None):
+        lebar_kanvas = pp_det["hasil"].shape[1]
+        skala_map = 1400.0 / float(lebar_kanvas)
+        bbox_k = pp_det.get("bbox_kertas")
+        trim_t = pp_det.get("trim_tampil") or (0, 0, 0, 0)
+        if bbox_k is None:
+            ox = oy = 0.0
+        else:
+            ox = float(bbox_k[0]) + float(trim_t[0])
+            oy = float(bbox_k[1]) + float(trim_t[1])
+        vis_field = gambar_kotak_field(
+            tampil_det, det["fields"], skala=skala_map, ox=ox, oy=oy
+        )
+    else:
+        vis_field = gambar_kotak_field(det["kecil"], det["fields"])
+    st.image(gambar_rgb(vis_field), use_container_width=True)
 
     st.subheader("Crop dan segmentasi per karakter")
     st.caption(
@@ -628,10 +761,10 @@ def halaman_segmentasi():
             )
 
             kiri, kanan = st.columns(2)
-            kiri.caption("Crop asli")
+            kiri.caption("Gambar field sebelum segmentasi")
             kiri.image(gambar_rgb(crop), use_container_width=True)
             if biner is not None:
-                kanan.caption("Binarisasi")
+                kanan.caption("Binarisasi yang dipakai untuk segmentasi (Otsu)")
                 kanan.image(biner, use_container_width=True)
 
             st.caption(f"Bounding box karakter ({len(karakter)} kotak)")
@@ -642,16 +775,32 @@ def halaman_segmentasi():
                 st.caption(f"Hasil OCR: {teks}")
 
             if karakter:
-                st.caption("Potongan tiap karakter:")
-                n = min(len(karakter), 14)
-                kol = st.columns(n)
-                for i in range(n):
-                    k = karakter[i]
-                    seg = crop[k["y1"]:k["y2"], k["x1"]:k["x2"]]
-                    if getattr(seg, "size", 0):
-                        kol[i].image(gambar_rgb(seg), use_container_width=True)
-                        if k.get("final"):
-                            kol[i].caption(k["final"])
+                st.caption("Potongan tiap karakter (urut kiri ke kanan):")
+                PER_BARIS = 10
+                for mulai in range(0, len(karakter), PER_BARIS):
+                    irisan = karakter[mulai:mulai + PER_BARIS]
+                    kol = st.columns(len(irisan))
+                    for ofs, (kolom, k) in enumerate(zip(kol, irisan)):
+                        seg = crop[k["y1"]:k["y2"], k["x1"]:k["x2"]]
+                        if getattr(seg, "size", 0):
+                            label = k.get("final") or k.get("cnn") or "?"
+                            kolom.image(gambar_rgb(seg), use_container_width=True)
+                            kolom.caption(f"{mulai + ofs + 1}: {label}")
+
+                st.caption("Urutan karakter hasil segmentasi:")
+                st.dataframe(
+                    [
+                        {
+                            "No": i,
+                            "Karakter": k.get("final") or k.get("cnn") or "?",
+                        }
+                        for i, k in enumerate(karakter, 1)
+                    ],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+                if teks:
+                    st.markdown(f"**Teks hasil segmentasi:** `{teks}`")
 
 
 def kenali_satu(crop, pakai_clahe, jenis=None):
@@ -1028,11 +1177,23 @@ def halaman_business_understanding():
                     st.caption(ket)
 
 
+# Jenis field yang dinilai pada halaman Evaluasi, sesuai daftar field
+# penelitian: nomor nota, nama penerima, proyek, nama produk, jumlah,
+# dan harga satuan. Field "satuan" tidak termasuk daftar tersebut.
+JENIS_DIEVALUASI = ("nomor", "penerima", "proyek", "produk", "jumlah", "harga")
+
+
 def halaman_evaluasi():
-    st.header("Evaluasi (CER)")
+    st.header("Evaluasi Hasil Pengenalan OCR")
     st.caption(
-        "Tulis ground truth tiap field. Program membandingkan hasil OCR "
-        "dengan ground truth menggunakan CER."
+        "Setiap field dinilai secara utuh: teks hasil OCR akhir dibandingkan "
+        "dengan Ground Truth nota asli. Metrik yang dipakai hanya CER "
+        "(Character Error Rate)."
+    )
+    st.latex(r"CER = \frac{S + D + I}{N} \times 100\%")
+    st.caption(
+        "S = karakter diganti (substitution), D = karakter hilang (deletion), "
+        "I = karakter tambahan (insertion), N = jumlah karakter Ground Truth."
     )
 
     if st.session_state.get("gambar_bgr") is None:
@@ -1051,47 +1212,117 @@ def halaman_evaluasi():
 
     nama = st.session_state.get("nama_file", "")
     baris = []
+    rincian = []
+    benar = 0
+    salah = 0
+    tanpa_gt = 0
 
     for f in det["fields"]:
-        h = hasil.get(f["id"], {})
-        t = h.get("tanpa", {})
-        # Ground truth diisi otomatis bila nota punya acuan, supaya CER
-        # langsung terhitung. Nilainya tetap bisa diubah manual.
-        bawaan = gt_field(nama, f["id"])
-        gt = st.text_input(
-            f"Ground truth — {f['label']}", value=bawaan, key=f"gt_{f['id']}"
-        )
-        teks = t.get("teks", "")
-        cer = hitung_cer(gt, teks) if gt.strip() else None
-        row = {
+        # Hanya enam jenis field yang dinilai; field lain dilewati.
+        if f.get("jenis") not in JENIS_DIEVALUASI:
+            continue
+
+        gt = gt_field(nama, f["id"])
+        t = (hasil.get(f["id"], {}) or {}).get("tanpa", {}) or {}
+        teks = t.get("teks", "") or ""
+
+        if not normalisasi_teks(gt):
+            # Ground truth kosong: field tidak bisa dinilai. Baris tetap
+            # ditampilkan agar transparan, tetapi tidak dihitung di ringkasan
+            # dan tidak memicu pembagian dengan nol.
+            tanpa_gt += 1
+            baris.append({
+                "Field": f["label"],
+                "Ground Truth": "(tidak tersedia)",
+                "Hasil OCR": teks or "(kosong)",
+                "CER (%)": None,
+                "Status": "➖ Tanpa GT",
+            })
+            continue
+
+        r = hitung_cer_rinci(gt, teks)
+        # Status ditentukan exact match: CER 0% -> Benar, selain itu -> Salah.
+        cocok = r["cer"] == 0.0
+        benar += int(cocok)
+        salah += int(not cocok)
+
+        baris.append({
             "Field": f["label"],
             "Ground Truth": gt,
-            "Hasil OCR": teks or "—",
-            "CER": None if cer is None else round(cer, 4),
-        }
-        baris.append(row)
+            "Hasil OCR": teks or "(kosong)",
+            "CER (%)": round(r["cer"] * 100, 2),
+            "Status": "✅ Benar" if cocok else "❌ Salah",
+        })
+        rincian.append({
+            "Field": f["label"],
+            "N (GT)": r["n"],
+            "S": r["s"],
+            "D": r["d"],
+            "I": r["i"],
+            "S+D+I": r["jarak"],
+            "CER (%)": round(r["cer"] * 100, 2),
+        })
 
-    st.subheader("Hasil OCR vs Ground Truth")
-    st.dataframe(baris, use_container_width=True, hide_index=True)
+    st.subheader("Hasil evaluasi per field")
+    st.caption(
+        "Seluruh field ditampilkan, baik yang benar maupun yang masih salah. "
+        "Teks Ground Truth dan hasil OCR ditampilkan utuh."
+    )
+    st.dataframe(
+        baris,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Field": st.column_config.TextColumn("Field", width="medium"),
+            "Ground Truth": st.column_config.TextColumn(
+                "Ground Truth", width="large"
+            ),
+            "Hasil OCR": st.column_config.TextColumn(
+                "Hasil OCR", width="large"
+            ),
+            "CER (%)": st.column_config.NumberColumn(
+                "CER (%)", format="%.2f"
+            ),
+            "Status": st.column_config.TextColumn("Status", width="small"),
+        },
+    )
+    st.caption("✅ Benar = CER 0% (teks sama persis) · ❌ Salah = CER > 0%.")
 
-    st.subheader("Rata-rata CER")
-    st.caption("Hanya field yang ground truth-nya diisi dan hasilnya tidak kosong.")
+    dievaluasi = benar + salah
+    akurasi = (benar / dievaluasi * 100.0) if dievaluasi else 0.0
+    nilai_cer = [b["CER (%)"] for b in baris if b["CER (%)"] is not None]
+    rata_cer = sum(nilai_cer) / len(nilai_cer) if nilai_cer else None
 
-    def rata(kunci):
-        nilai = [r[kunci] for r in baris if r.get(kunci) is not None]
-        return (round(sum(nilai) / len(nilai), 4), len(nilai)) if nilai else (None, 0)
+    st.subheader("Ringkasan")
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Field benar", benar)
+    k2.metric("Field salah", salah)
+    k3.metric("Exact-match field accuracy", f"{akurasi:.2f}%")
+    k4.metric("Rata-rata CER", "-" if rata_cer is None else f"{rata_cer:.2f}%")
 
-    ringkas = []
-    for label, kunci in (
-        ("OCR (CNN + Template Matching)", "CER"),
-    ):
-        if any(kunci in r for r in baris):
-            nilai, jumlah = rata(kunci)
-            ringkas.append({
-                "Metode": label, "Rata-rata CER": nilai, "Jumlah field": jumlah,
-            })
+    st.caption(
+        "Field dihitung benar hanya bila seluruh isinya sama persis dengan "
+        "Ground Truth. Satu karakter berbeda sudah membuat field berstatus "
+        "Salah, meskipun nilai CER-nya kecil."
+    )
+    if tanpa_gt:
+        st.info(
+            f"{tanpa_gt} field tidak memiliki Ground Truth sehingga tidak "
+            "dihitung dalam ringkasan."
+        )
 
-    st.dataframe(ringkas, use_container_width=True, hide_index=True)
+    with st.expander("Rincian operasi CER (S, D, I, N) per field"):
+        st.dataframe(rincian, use_container_width=True, hide_index=True)
+        st.caption(
+            "S = karakter diganti, D = karakter hilang, I = karakter "
+            "tambahan, N = jumlah karakter Ground Truth."
+        )
+
+    st.caption(
+        "Normalisasi teks: spasi berlebih dirapikan dan spasi tepi dibuang, "
+        "baik pada Ground Truth maupun hasil OCR. Huruf, angka, dan tanda "
+        "baca tidak diubah sehingga perbedaan sekecil apa pun tetap terhitung."
+    )
 
 
 # Routing enam halaman
