@@ -122,6 +122,38 @@ def binarisasi(gambar):
 # DETEKSI KOMPONEN
 # =========================================
 
+def binarisasi_batas(gambar):
+    """
+    CATATAN: pendekatan ini SUDAH DIUJI dan DITOLAK.
+
+    Idenya: cari kotak karakter dari adaptive threshold (pemisahan lebih
+    baik, 41 vs 110 karakter tergabung) tetapi ambil piksel dari Otsu
+    (bentuk utuh). Kenyataannya CER memburuk dari 4.39% menjadi 9.80%,
+    karena kotak hasil adaptive memecah karakter menjadi beberapa bagian
+    (mis. titik dan batang 'i' terpisah) sehingga jumlah kotak melebihi
+    jumlah karakter sebenarnya.
+
+    Fungsi dipertahankan sebagai dokumentasi dan tidak dipakai.
+    """
+    abu = cv2.cvtColor(gambar, cv2.COLOR_BGR2GRAY)
+    abu = cv2.resize(abu, None, fx=SKALA, fy=SKALA,
+                     interpolation=cv2.INTER_CUBIC)
+    abu = cv2.GaussianBlur(abu, (3, 3), 0)
+
+    adaptif = cv2.adaptiveThreshold(
+        abu, 255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY_INV,
+        31, 10,
+    )
+
+    # Sedikit pelebaran agar kotak tidak terlalu ketat dan tepi huruf
+    # tidak terpotong saat piksel diambil dari biner Otsu.
+    adaptif = cv2.dilate(adaptif, np.ones((3, 3), np.uint8), iterations=1)
+
+    return adaptif
+
+
 def deteksi_komponen(biner):
     n, _, stats, _ = (
         cv2.connectedComponentsWithStats(

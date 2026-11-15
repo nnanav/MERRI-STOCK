@@ -222,20 +222,53 @@ def rapikan_satuan(teks):
     return teks.strip()
 
 
+@st.cache_data(show_spinner=False, max_entries=400)
+def _segmentasi_cache(ndim, tinggi, lebar, data_bytes):
+    """
+    Jalankan segmentasi+klasifikasi untuk satu crop, dengan cache.
+
+    Tanpa cache, halaman Segmentasi menjalankan CNN + Template Matching +
+    dynamic programming untuk SETIAP field pada SETIAP rerun Streamlit,
+    sehingga memuat halaman terasa sangat lambat (puluhan detik sampai
+    menit). Dengan cache, hasil yang sama dipakai ulang selama isi crop
+    tidak berubah — termasuk dipakai bersama oleh halaman Segmentasi dan
+    Pengenalan karena keduanya memakai crop yang sama.
+    """
+    from processing.segmentasi_karakter import segmentasi_utama
+
+    arr = np.frombuffer(data_bytes, np.uint8)
+    crop = arr.reshape(tinggi, lebar, 3) if ndim == 3 else arr.reshape(
+        tinggi, lebar
+    )
+    model, labels, templates, label_tm = muat_semua_model()
+    _, hasil, metode = segmentasi_utama(
+        crop, model, labels, templates, label_tm
+    )
+    return hasil, metode
+
+
+def segmentasi_crop(crop):
+    """Segmentasi satu crop memakai cache. Mengembalikan (hasil, metode)."""
+    img = ke_tigakanal(crop)
+    if img is None or img.size == 0:
+        return [], "-"
+    img = np.ascontiguousarray(img)
+    return _segmentasi_cache(
+        img.ndim, img.shape[0], img.shape[1], img.tobytes()
+    )
+
+
 def kenali_crop(crop, pakai_clahe=False, jenis=None):
     # Satu pipeline OCR: TM menemukan posisi karakter, CNN mengklasifikasi.
-    from processing.segmentasi_karakter import segmentasi_utama, susun_teks
+    from processing.segmentasi_karakter import susun_teks
     from processing.pengenalan_karakter import gabung_segmen
-    model, labels, templates, label_tm = muat_semua_model()
     img = ke_tigakanal(crop)
     if img is None or img.size == 0:
         return {"teks": "", "cnn": "", "tm": "", "n": 0, "detail": [],
                 "metode": "-", "status": "crop_kosong"}
     if pakai_clahe:
         img = terapkan_clahe(img)
-    biner, hasil, metode = segmentasi_utama(
-        img, model, labels, templates, label_tm
-    )
+    hasil, metode = segmentasi_crop(img)
     if jenis == "satuan":
         hasil = buang_tanda_kali(hasil)
     tinggi = [s["y2"] - s["y1"] for s in hasil]
@@ -509,21 +542,18 @@ def ambil_deteksi():
 
 def segmen_field(crop, jenis=None):
     # Segmentasi per karakter memakai pipeline sebenarnya (CNN+Template
-    # Matching + dynamic programming), agar kotak yang ditampilkan sama
-    # dengan yang dipakai pengenalan. Fallback ke proyeksi bila gagal.
+    # Matching + dynamic programming) lewat cache, agar kotak yang
+    # ditampilkan sama dengan yang dipakai pengenalan TANPA menjalankan
+    # ulang model pada setiap rerun.
     cimg = ke_tigakanal(crop)
     if cimg is None or cimg.size == 0:
         return None, [], None, "", []
 
     try:
-        from processing.segmentasi_karakter import (
-            segmentasi_utama, susun_teks, SKALA,
-        )
+        from processing.segmentasi_karakter import susun_teks, SKALA
         from processing.pengenalan_karakter import gabung_segmen
-        model, labels, templates, label_tm = muat_semua_model()
-        biner, hasil, metode = segmentasi_utama(
-            cimg, model, labels, templates, label_tm
-        )
+
+        hasil, _metode = segmentasi_crop(cimg)
         if jenis == "satuan":
             hasil = buang_tanda_kali(hasil)
         final, detail = gabung_segmen(hasil)
@@ -545,10 +575,7 @@ def segmen_field(crop, jenis=None):
                 "cnn": s.get("cnn", ""), "tm": s.get("tm", ""),
                 "final": fin.get("final", ""),
             })
-        biner_tampil = cv2.resize(
-            biner, (w, h), interpolation=cv2.INTER_AREA
-        ) if biner is not None else None
-        return _gambar_kotak(cimg, karakter), karakter, biner_tampil, teks, detail
+        return _gambar_kotak(cimg, karakter), karakter, None, teks, detail
     except Exception:
         hasil = segmentasi_per_karakter(cimg)
         karakter = hasil["karakter"]
@@ -756,16 +783,14 @@ def halaman_segmentasi():
                 st.warning("Crop field ini tidak tersedia.")
                 continue
 
-            vis, karakter, biner, teks, _detail = segmen_field(
+            vis, karakter, _biner, teks, _detail = segmen_field(
                 crop, f.get("jenis")
             )
 
-            kiri, kanan = st.columns(2)
-            kiri.caption("Gambar field sebelum segmentasi")
-            kiri.image(gambar_rgb(crop), use_container_width=True)
-            if biner is not None:
-                kanan.caption("Binarisasi yang dipakai untuk segmentasi (Otsu)")
-                kanan.image(biner, use_container_width=True)
+            # Tampilan memakai citra asli saja (tanpa gambar binerisasi),
+            # sesuai permintaan: cukup bounding box di atas gambar asli.
+            st.caption("Gambar field sebelum segmentasi")
+            st.image(gambar_rgb(crop), use_container_width=True)
 
             st.caption(f"Bounding box karakter ({len(karakter)} kotak)")
             if vis is not None:
