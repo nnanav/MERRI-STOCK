@@ -495,13 +495,6 @@ def _rapikan_gabung_pecah(hasil, biner, tinggi_acuan,
         pot = biner[max(0, y1):min(H, y2), max(0, x1):min(W, x2)]
         return _prediksi_potongan(pot, model, labels, templates, label_tm)
 
-    # (A) Gabungkan kembali pasangan sempit yang sebenarnya satu karakter.
-    #
-    # Kasus nyata: 'O' pada "KSO" terbelah menjadi 'K' + ')' (pc 0.97 dan
-    # 1.00). CNN sangat yakin pada busur, sehingga dua busur selalu terlihat
-    # "benar" padahal masih satu huruf. Karena itu penggabungan TIDAK
-    # memakai keyakinan busur sebagai pembanding, melainkan mensyaratkan
-    # hasil gabungannya berupa huruf bulat/tertutup yang wajar.
     busur = {"(", ")", "[", "]", "C", "c", "K", "G", "0", "O", "o", "Q"}
     huruf_bulat = {"O", "o", "0", "Q", "D", "C", "G", "c", "e", "a", "U"}
     gabung = []
@@ -541,17 +534,6 @@ def _rapikan_gabung_pecah(hasil, biner, tinggi_acuan,
         i += 1
     hasil = gabung
 
-    # (B) Pecah segmen yang menampung dua karakter.
-    #
-    # Dua pemicu:
-    #   1. lebar > 1.05 x tinggi DAN hasilnya ragu / CNN-TM tidak sepakat
-    #      (mis. 'GI' terbaca 'a');
-    #   2. label yang terbaca MUSTAHIL selebar itu. Contoh nyata: "in"
-    #      (lebar 1.03 x tinggi) terbaca '.' dengan pc 0.90, dan "ei"
-    #      (1.07 x tinggi) terbaca '-' — titik dan strip tidak mungkin
-    #      selebar satu huruf penuh, jadi pasti dua karakter menempel.
-    #      Tanpa aturan ini, keyakinan model yang keliru membuat
-    #      penggabungan tetap dipertahankan.
     sempit_mustahil = {
         ".", ",", "'", '"', "`", ":", ";", "!", "|",
         "i", "l", "1", "I", "j", "-", "~", "_",
@@ -559,12 +541,24 @@ def _rapikan_gabung_pecah(hasil, biner, tinggi_acuan,
     pecah = []
     for s in hasil:
         w = s["x2"] - s["x1"]
-        ragu = s.get("pc", 0.0) < 0.9 or s.get("tm") != s.get("cnn")
+        pc = float(s.get("pc", 0.0) or 0.0)
+        ragu = pc < 0.9 or s.get("tm") != s.get("cnn")
         lebar_ragu = w > 1.05 * ta and ragu
         label_mustahil = (
             s.get("cnn") in sempit_mustahil and w > 0.75 * ta
         )
-        if lebar_ragu or label_mustahil:
+        # Pemicu ketiga: keyakinan SANGAT rendah.
+        #
+        # Gabungan huruf sempit tidak bisa dideteksi dari lebar. Contoh
+        # nyata: "In" pada "Indra" menyatu menjadi satu kotak selebar
+        # 0.47 x tinggi huruf — LEBIH SEMPIT dari median karakter,
+        # sehingga tidak ada ambang lebar yang bisa menangkapnya.
+        # Satu-satunya sinyal yang tersisa adalah keraguan model.
+        # Pemicu ini hanya dipakai bila keyakinan benar-benar rendah, dan
+        # hasil pecahannya harus jauh lebih yakin (lihat syarat di bawah),
+        # sehingga huruf yang memang dikenali yakin tidak ikut berubah.
+        ragu_kuat = pc < 0.60 and w > 0.40 * ta
+        if lebar_ragu or label_mustahil or ragu_kuat:
             pot = biner[max(0, s["y1"]):min(H, s["y2"]),
                         max(0, s["x1"]):min(W, s["x2"])]
             proyeksi = np.count_nonzero(pot, axis=0).astype(np.float32)
@@ -620,7 +614,13 @@ def _rapikan_gabung_pecah(hasil, biner, tinggi_acuan,
                     # pembanding. Ambang ini mencegah potongan asal-asalan
                     # (mis. "in" terpotong menjadi 'k' + 'I' dengan 0.79).
                     wajar = label_mustahil and skor >= 0.80
-                    if yakin_lebih_baik or wajar:
+                    # Pemicu keraguan menuntut bukti paling kuat: kedua
+                    # bagian harus benar-benar yakin.
+                    if ragu_kuat:
+                        terima = skor >= 0.85
+                    else:
+                        terima = yakin_lebih_baik or wajar
+                    if terima:
                         for seg, pr in ((0, kiri), (pos, kanan)):
                             c, t, pc, pt = pr
                             x1 = s["x1"] + seg
@@ -786,10 +786,15 @@ def segmentasi_karakter(
         return biner, []
 
     # Estimasi lebar satu karakter untuk memecah segmen yang terlalu lebar.
+    #
+    # Hanya komponen yang JELAS satu karakter (lebar <= 0.90 x tinggi) yang
+    # dipakai menghitung median. Komponen yang sudah tergabung tidak boleh
+    # ikut, karena akan menggeser estimasi ke atas dan membuat pasangan
+    # huruf sempit tidak pernah dikenali sebagai gabungan.
     lebar_satu = [
         w0 for (_, _, w0, h0) in komponen
         if h0 >= 0.55 * tinggi_acuan
-        and 0.15 * tinggi_acuan <= w0 <= 1.10 * tinggi_acuan
+        and 0.15 * tinggi_acuan <= w0 <= 0.90 * tinggi_acuan
     ]
     if len(lebar_satu) >= 3:
         char_w_est = float(np.median(lebar_satu))
@@ -803,12 +808,37 @@ def segmentasi_karakter(
             y:y+h,
             x:x+w
         ]
-        # Hanya komponen lebar yang
-        # dicoba dipisahkan lebih lanjut.
+        # Komponen dicoba dipisah bila lebih lebar dari SATU karakter.
+        #
+        # Dua ukuran dipakai sekaligus:
+        #   - relatif tinggi huruf (1.10): menangkap gabungan yang jelas;
+        #   - relatif lebar median karakter pada baris ini (1.35): menangkap
+        #     gabungan huruf SEMPIT yang secara absolut tidak lebar.
+        # Contoh nyata: "rt" pada "Arta" dan "is" pada "Muis" hanya
+        # ~0.8-1.0 x tinggi huruf sehingga lolos dari ambang 1.10 dan
+        # keluar sebagai satu kotak (terbaca 'n' dan 'b'). Dengan
+        # pembanding median baris, gabungan semacam itu tetap terdeteksi.
         is_lebar = (
-            w > AMBANG_LEBAR_KOMPONEN * tinggi_acuan
+            (
+                w > AMBANG_LEBAR_KOMPONEN * tinggi_acuan
+                or w > 1.35 * char_w_est
+            )
             and h > 0.40 * tinggi_acuan
         )
+
+        # Jaring pengaman untuk aturan baru (lebar vs median karakter).
+        #
+        # Aturan lama (w > 1.10 x tinggi) tetap berlaku apa adanya. Aturan
+        # tambahan hanya menurunkan ambang untuk komponen yang belum lebar
+        # secara absolut, sehingga huruf tunggal seperti 'a', 's', 'M'
+        # bisa ikut terkirim ke pemisah. Karena itu, pada zona itu komponen
+        # yang SUDAH dikenali yakin sebagai satu karakter tidak dipecah.
+        if is_lebar and w <= AMBANG_LEBAR_KOMPONEN * tinggi_acuan:
+            cek = _prediksi_potongan(
+                blob, model, labels, templates, label_tm
+            )
+            if cek is not None and cek[2] >= 0.90:
+                is_lebar = False
 
         if is_lebar:
             batas = calon_batas(

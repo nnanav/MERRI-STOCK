@@ -77,6 +77,7 @@ python tests/uji_app_streamlit.py     # cek 6 halaman dashboard
 python tests/uji_info_dataset.py      # cek konsistensi angka data latih
 python tests/uji_integrasi_segmen.py  # cek alur upload sampai evaluasi
 python tests/ukur_cer.py              # evaluasi CER per field vs ground truth
+python tests/ukur_segmen_gt.py        # jumlah kotak vs jumlah karakter GT
 python tests/uji_upload.py            # cek jalur upload (decode gambar + OCR)
 python tests/uji_halaman_berisi.py    # render halaman dengan nota nyata
 python tests/audit_segmentasi.py      # cek karakter tergabung/terpotong (16 nota)
