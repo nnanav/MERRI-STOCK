@@ -37,10 +37,10 @@ def main():
     print("Setelah proses exception:", [e.value for e in at.exception])
     print("jumlah field:", len(det["fields"]) if det else None)
 
-    at.sidebar.radio[0].set_value("Segmentasi").run()
+    at.sidebar.radio[0].set_value("Segmentasi Karakter").run()
     print("Segmentasi exception:", [e.value for e in at.exception])
 
-    at.sidebar.radio[0].set_value("Pengenalan").run()
+    at.sidebar.radio[0].set_value("Pengenalan Karakter").run()
     print("Pengenalan exception:", [e.value for e in at.exception])
 
     at.sidebar.radio[0].set_value("Evaluasi").run()

@@ -1329,13 +1329,24 @@ def halaman_evaluasi():
 st.sidebar.title("MERRI-STOCK")
 st.sidebar.caption("Sistem Pengenalan Teks Nota Transaksi CV Merriena Jaya")
 
+# Nama halaman disimpan sebagai konstanta dan dipakai untuk DAFTAR menu
+# maupun untuk routing. Sebelumnya keduanya ditulis terpisah sehingga
+# pernah tidak cocok ("Segmentasi Karakter" di menu vs "Segmentasi" di
+# routing) dan halaman menjadi kosong tanpa pesan apa pun.
+HALAMAN_BU = "Business Understanding"
+HALAMAN_UPLOAD = "Upload Nota"
+HALAMAN_PREPROSES = "Preprocessing"
+HALAMAN_SEGMEN = "Segmentasi Karakter"
+HALAMAN_KENAL = "Pengenalan Karakter"
+HALAMAN_EVAL = "Evaluasi"
+
 HALAMAN = [
-    "Business Understanding",
-    "Upload Nota",
-    "Preprocessing",
-    "Segmentasi Karakter",
-    "Pengenalan Karakter",
-    "Evaluasi",
+    HALAMAN_BU,
+    HALAMAN_UPLOAD,
+    HALAMAN_PREPROSES,
+    HALAMAN_SEGMEN,
+    HALAMAN_KENAL,
+    HALAMAN_EVAL,
 ]
 
 halaman = st.sidebar.radio("Halaman", HALAMAN, key="navigasi")
@@ -1343,15 +1354,21 @@ halaman = st.sidebar.radio("Halaman", HALAMAN, key="navigasi")
 if st.session_state.get("nama_file"):
     st.sidebar.info(f"Nota aktif: {st.session_state['nama_file']}")
 
-if halaman == "Business Understanding":
+if halaman == HALAMAN_BU:
     halaman_business_understanding()
-elif halaman == "Upload Nota":
+elif halaman == HALAMAN_UPLOAD:
     halaman_upload()
-elif halaman == "Preprocessing":
+elif halaman == HALAMAN_PREPROSES:
     halaman_preprocessing()
-elif halaman == "Segmentasi":
+elif halaman == HALAMAN_SEGMEN:
     halaman_segmentasi()
-elif halaman == "Pengenalan":
+elif halaman == HALAMAN_KENAL:
     halaman_pengenalan()
-elif halaman == "Evaluasi":
+elif halaman == HALAMAN_EVAL:
     halaman_evaluasi()
+else:
+    # Jaring pengaman: bila nama halaman tidak dikenali, tampilkan pesan
+    # agar tidak pernah lagi muncul halaman kosong tanpa penjelasan.
+    st.error(
+        f"Halaman {halaman!r} tidak dikenali. Pilih halaman lain pada menu."
+    )

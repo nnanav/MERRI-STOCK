@@ -23,7 +23,7 @@ def jalankan(halaman):
 def main():
     for halaman in (
         "Business Understanding", "Upload Nota", "Preprocessing",
-        "Segmentasi", "Pengenalan", "Evaluasi",
+        "Segmentasi Karakter", "Pengenalan Karakter", "Evaluasi",
     ):
         at, status = jalankan(halaman)
         galat = [e.value for e in at.exception]

@@ -21,7 +21,8 @@ print(f"deteksi: {len(det['fields'])} field")
 print(f"kunci det: {sorted(det.keys())}")
 
 gagal = 0
-for halaman in ("Preprocessing", "Segmentasi", "Pengenalan", "Evaluasi"):
+for halaman in ("Preprocessing", "Segmentasi Karakter", "Pengenalan Karakter",
+                "Evaluasi"):
     at = AppTest.from_file(str(APP), default_timeout=300)
     at.run()
     at.session_state["gambar_bgr"] = gambar
