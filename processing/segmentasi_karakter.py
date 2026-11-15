@@ -76,6 +76,24 @@ def crop_tanpa_teks(gambar):
 
 
 def binarisasi(gambar):
+    """
+    Ubah crop abu-abu menjadi citra biner (tinta putih di latar hitam).
+
+    Memakai Otsu global. Varian lain sudah diuji pada 3 nota acuan dan
+    hasilnya lebih buruk untuk pengenalan akhir:
+
+      varian                komponen tergabung   CER akhir
+      Otsu (dipakai)              110            4.39%   <-- terbaik
+      Adaptive threshold           41           10.05%
+      Otsu dibatasi adaptive       72              -
+      Otsu tanpa blur              93              -
+
+    Adaptive threshold memang memisahkan lebih banyak huruf, tetapi
+    merusak bentuk karakter (goresan tipis pecah, mis. "KonStein" menjadi
+    "K0nS(e/nS") sehingga pengenalan jadi jauh lebih salah. Otsu dipilih
+    karena mempertahankan bentuk karakter; sisa huruf menempel ditangani
+    di tahap pemisahan (DP + _rapikan_gabung_pecah).
+    """
     abu = cv2.cvtColor(
         gambar, cv2.COLOR_BGR2GRAY
     )
@@ -563,6 +581,10 @@ def _rapikan_gabung_pecah(hasil, biner, tinggi_acuan,
                         max(0, s["x1"]):min(W, s["x2"])]
             proyeksi = np.count_nonzero(pot, axis=0).astype(np.float32)
             tengah = w // 2
+            # Jendela 35% dari tengah: cukup untuk pasangan huruf biasa,
+            # tanpa membuat potongan asal-asalan pada karakter lebar.
+            # Jendela 45% sudah dicoba dan menurunkan akurasi (CER
+            # 4.39% -> 5.94%), jadi nilai ini yang dipakai.
             lo = max(1, tengah - int(0.35 * w))
             hi = min(w - 1, tengah + int(0.35 * w))
             if hi > lo:
@@ -1106,16 +1128,29 @@ def susun_teks(
     for i in range(1, len(hasil)):
         celah.append(hasil[i]["x1"] - hasil[i - 1]["x2"])
 
-    # Ambang spasi adaptif: celah jauh lebih besar dari celah antarkarakter
-    # biasa (median) sekaligus cukup besar terhadap tinggi teks.
-    if celah:
-        celah_med = float(np.median(celah))
-        ambang_spasi = max(
-            0.22 * tinggi_acuan,
-            celah_med + 0.25 * tinggi_acuan,
-        )
-    else:
-        ambang_spasi = 0.30 * tinggi_acuan
+    # Ambang spasi antarkata.
+    #
+    # Dua ukuran dipakai, lalu diambil yang LEBIH KECIL agar spasi yang
+    # wajar tidak hilang (keluhan nyata: "RS Abdul" menjadi "RSAbdul"):
+    #   1. berbasis celah antarkarakter (aturan lama);
+    #   2. berbasis lebar karakter pada baris ini.
+    # Mengambil nilai terkecil berarti spasi lebih mudah dikenali, tanpa
+    # pernah lebih sulit daripada aturan lama.
+    lebar_kar = [
+        max(1, s["x2"] - s["x1"])
+        for s in hasil
+        if s.get("cnn") not in {".", ",", "'", "`", "-", ":", ";"}
+    ]
+    kar_med = float(np.median(lebar_kar)) if lebar_kar else 0.55 * tinggi_acuan
+
+    ambang_celah = (
+        max(0.22 * tinggi_acuan,
+            float(np.median(celah)) + 0.25 * tinggi_acuan)
+        if celah else 0.30 * tinggi_acuan
+    )
+    ambang_lebar = max(0.28 * tinggi_acuan, 0.45 * kar_med)
+
+    ambang_spasi = min(ambang_celah, ambang_lebar)
 
     for i, item in enumerate(hasil):
         if i > 0:

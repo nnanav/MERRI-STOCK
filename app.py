@@ -1333,8 +1333,8 @@ HALAMAN = [
     "Business Understanding",
     "Upload Nota",
     "Preprocessing",
-    "Segmentasi",
-    "Pengenalan",
+    "Segmentasi Karakter",
+    "Pengenalan Karakter",
     "Evaluasi",
 ]
 
