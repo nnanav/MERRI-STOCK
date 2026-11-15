@@ -70,6 +70,20 @@ python scripts/latih_cnn.py
 Hasil pelatihan disimpan ke `models/cnn_karakter.keras` dan `models/labels.json`.
 **Backup model lama terlebih dahulu** jika ingin membandingkan hasil.
 
+## Gambar Data Latih Karakter
+
+Membuat gambar grid seluruh kelas karakter dari dataset asli (untuk laporan):
+
+```powershell
+python scripts/buat_gambar_data_latih.py                      # karakter gelap di latar putih
+python scripts/buat_gambar_data_latih.py --gaya latih          # persis input CNN (putih di hitam)
+python scripts/buat_gambar_data_latih.py --kolom 10            # atur jumlah kolom
+```
+
+Hasil disimpan ke `output/data_latih_karakter.png` (atau `output/data_latih_input_cnn.png`).
+Setiap kotak berisi satu contoh asli hasil normalisasi 32x32, dengan nomor kelas
+dan kode (`A.U` huruf besar, `a.L` huruf kecil, `, S` simbol).
+
 ## Pengujian
 
 ```powershell
