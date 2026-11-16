@@ -723,10 +723,8 @@ def halaman_segmentasi():
     nomor = det.get("nomor", {})
     st.subheader("Deteksi nomor nota (mask merah)")
     st.caption(
-        "Mask merah hanya dihitung pada wilayah kanan-atas tempat nomor nota "
-        "berada, lalu dipakai mengisolasi digit nomor; huruf 'NO' dan titik "
-        "dua dibuang sehingga hanya digit yang tersisa. Mask tidak diterapkan "
-        "ke seluruh gambar nota."
+        "Mask merah dipakai mengisolasi digit nomor nota; huruf 'NO' dan "
+        "titik dua dibuang sehingga hanya digit yang tersisa."
     )
     st.caption(
         f"Status: {nomor.get('status', '-')} — {nomor.get('pesan', '')}"
