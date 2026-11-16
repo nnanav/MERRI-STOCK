@@ -800,18 +800,6 @@ def halaman_segmentasi():
                 st.caption(f"Hasil OCR: {teks}")
 
             if karakter:
-                st.caption("Potongan tiap karakter (urut kiri ke kanan):")
-                PER_BARIS = 10
-                for mulai in range(0, len(karakter), PER_BARIS):
-                    irisan = karakter[mulai:mulai + PER_BARIS]
-                    kol = st.columns(len(irisan))
-                    for ofs, (kolom, k) in enumerate(zip(kol, irisan)):
-                        seg = crop[k["y1"]:k["y2"], k["x1"]:k["x2"]]
-                        if getattr(seg, "size", 0):
-                            label = k.get("final") or k.get("cnn") or "?"
-                            kolom.image(gambar_rgb(seg), use_container_width=True)
-                            kolom.caption(f"{mulai + ofs + 1}: {label}")
-
                 st.caption("Urutan karakter hasil segmentasi:")
                 st.dataframe(
                     [
@@ -1109,72 +1097,26 @@ def halaman_business_understanding():
 
     # 4. Informasi Data Latih
     st.subheader("4. Informasi Data Latih")
-    st.caption(
-        "Angka pada bagian ini dihitung otomatis dari isi folder dataset "
-        "dan label model, sehingga ikut berubah bila isi dataset berubah."
-    )
-
-    _, kanan = st.columns([5, 1])
-    with kanan:
-        if st.button("Hitung ulang", key="muat_ulang_dataset"):
-            info_dataset_latih.clear()
-            st.rerun()
 
     info = info_dataset_latih()
 
     if not info["total"]:
         st.warning("Folder dataset tidak ditemukan atau masih kosong.")
     else:
-        atas = st.columns(4)
-        atas[0].metric("Total gambar karakter", f"{info['total']:,}")
-        atas[1].metric("Huruf", f"{info['huruf']:,}")
-        atas[2].metric("Angka", f"{info['angka']:,}")
-        atas[3].metric("Simbol", f"{info['simbol']:,}")
-
-        bawah = st.columns(4)
-        bawah[0].metric("Kelas karakter model", info["kelas_model"])
-        bawah[1].metric("Dipakai untuk pelatihan", f"{info['dipakai']:,}")
-        bawah[2].metric("Data latih (80%)", f"{info['latih']:,}")
-        bawah[3].metric("Data validasi (20%)", f"{info['validasi']:,}")
+        kol = st.columns(4)
+        kol[0].metric("Total gambar karakter", f"{info['total']:,}")
+        kol[1].metric("Kelas karakter model", info["kelas_model"])
+        kol[2].metric("Data latih (80%)", f"{info['latih']:,}")
+        kol[3].metric("Data validasi (20%)", f"{info['validasi']:,}")
 
         st.caption(
-            f"Tersedia {info['total']:,} gambar karakter. Sebanyak "
-            f"{info['dikecualikan']:,} gambar dikecualikan karena tidak lolos "
-            f"pemeriksaan dataset, sehingga {info['dipakai']:,} gambar "
-            f"benar-benar dipakai. Dari jumlah tersebut {info['latih']:,} "
-            f"menjadi data latih dan {info['validasi']:,} menjadi data "
-            f"validasi (pembagian stratified {100 - int(RASIO_VALIDASI * 100)}:"
-            f"{int(RASIO_VALIDASI * 100)} per kelas, yaitu latih:validasi)."
+            f"Dataset berisi {info['total']:,} gambar karakter "
+            f"({info['huruf']:,} huruf, {info['angka']:,} angka, "
+            f"{info['simbol']:,} simbol) pada {info['kelas_model']} kelas. "
+            f"Sebanyak {info['dipakai']:,} gambar dipakai untuk pelatihan, "
+            f"dibagi menjadi {info['latih']:,} data latih dan "
+            f"{info['validasi']:,} data validasi."
         )
-
-        with st.expander("Rincian pemeriksaan dataset"):
-            st.markdown("**Status berkas menurut laporan validasi**")
-
-            if info["laporan_ada"]:
-                tabel = [
-                    {"Status": nama or "(kosong)", "Jumlah": jumlah}
-                    for nama, jumlah in sorted(info["status"].items())
-                ]
-                st.dataframe(tabel, hide_index=True)
-            else:
-                st.caption(
-                    "Laporan validasi belum tersedia. Jalankan "
-                    "`python scripts/validasi_dataset.py` agar jumlah data "
-                    "yang dikecualikan ikut terhitung."
-                )
-
-            st.markdown("**Kelas karakter**")
-            st.caption(
-                f"Dataset berisi {info['kelas_dataset']} kelas dan model "
-                f"mengenali {info['kelas_model']} kelas: huruf A-Z, "
-                f"huruf a-z, angka 0-9, dan simbol."
-            )
-
-            if info["folder_kosong"]:
-                st.caption(
-                    "Folder simbol tanpa gambar (belum menjadi kelas): "
-                    + ", ".join(info["folder_kosong"])
-                )
 
     # 5. Enam field target
     st.subheader("5. Enam Field Target")

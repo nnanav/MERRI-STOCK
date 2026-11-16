@@ -265,148 +265,101 @@ def calon_batas(blob, tinggi_acuan):
 # PENILAIAN CNN DAN TEMPLATE MATCHING
 # =========================================
 
-def skor_potongan(
-    blob,
-    batas,
-    tinggi_acuan,
-    model,
-    labels,
-    templates,
-    label_tm,
-    penalti=0.55
-):
-    pasangan = []
-    array = []
+def kandidat_potongan(blob, batas, tinggi_acuan):
+    """
+    Kumpulkan semua potongan kandidat (i, j) beserta citra 32x32-nya.
 
-    min_w = max(
-        2,
-        int(0.10 * tinggi_acuan)
-    )
+    Dipisahkan dari penilaian agar potongan dari SEMUA komponen dalam satu
+    field dapat diprediksi dalam satu batch Ã¢â‚¬â€ jauh lebih cepat daripada
+    memanggil model sekali per komponen.
+    """
+    min_w = max(2, int(0.10 * tinggi_acuan))
 
     # Batas lebar maksimum untuk SATU karakter.
     #
     # Sebelumnya 0.95 x tinggi huruf. Nilai itu terlalu sempit sehingga
-    # huruf yang memang lebar seperti 'M', 'm', 'W' (rasio lebar/tinggi
-    # sekitar 1.0-1.3) tidak pernah dianggap sebagai SATU karakter dan
-    # selalu dipaksa dipecah menjadi potongan-potongan yang lebih sempit.
-    # Akibatnya 'M' pecah menjadi 'N'+'I' (PAMA -> PANIA, Muat -> NIuat)
-    # dan 'm' pecah menjadi 'r'+'n' (Cm -> Crn). Gumpalan dua karakter
-    # seperti 'MA' (rasio ~2.1) bahkan dipaksa menjadi TIGA potongan
-    # karena dua potongan selebar ~1 x tinggi pun melebihi 0.95.
-    #
-    # Batas 1.60 memberi ruang bagi huruf lebar tetap utuh, tetapi
-    # potongan yang janggal tetap kena penalti lebar di bawah sehingga
-    # pasangan huruf yang menempel (mis. 'va', 'ln') masih dipecah.
-    max_w = max(
-        min_w + 1,
-        int(1.60 * tinggi_acuan)
-    )
+    # huruf yang memang lebar seperti 'M', 'm', 'W' (rasio 1.0-1.3) selalu
+    # dipaksa dipecah ('M' -> 'N'+'I', 'm' -> 'r'+'n'). Batas 1.60 memberi
+    # ruang bagi huruf lebar tetap utuh; potongan janggal tetap kena
+    # penalti lebar pada tahap penilaian.
+    max_w = max(min_w + 1, int(1.60 * tinggi_acuan))
+
+    pasangan = []
+    array = []
 
     for i in range(len(batas) - 1):
-
         for j in range(i + 1, len(batas)):
             lebar = batas[j] - batas[i]
-
             if lebar > max_w:
                 break
-
             if lebar < min_w:
                 continue
-
-            pot = normalisasi_potongan(
-                blob[:, batas[i]:batas[j]]
-            )
-
+            pot = normalisasi_potongan(blob[:, batas[i]:batas[j]])
             if pot is not None:
                 pasangan.append((i, j))
                 array.append(pot)
 
-    if not array:
-        return {}
+    return pasangan, array
 
-    # CNN
-    X = np.asarray(
-        array,
-        dtype=np.float32
-    )[..., None] / 255.0
 
-    prob = model.predict(
-        X,
-        batch_size=128,
-        verbose=0
-    )
+def skor_dari_prediksi(batas, tinggi_acuan, pasangan, prediksi,
+                       labels, label_tm, penalti=0.55):
+    """
+    Hitung skor pemilihan batas DP dari prediksi yang sudah dihitung.
 
-    # Template Matching
-    V = X[..., 0].reshape(
-        len(X), -1
-    )
-
-    V = V / np.maximum(
-        np.linalg.norm(
-            V,
-            axis=1,
-            keepdims=True
-        ),
-        1e-8
-    )
-
-    similarity = V @ templates.T
-
+    Skor ini bukan nilai akurasi OCR, melainkan nilai untuk memilih
+    kombinasi potongan yang paling masuk akal.
+    """
     skor = {}
 
-    for row, (i, j) in enumerate(pasangan):
-        c = int(np.argmax(prob[row]))
-        t = int(np.argmax(similarity[row]))
-
-        pc = float(prob[row, c])
-        pt = float(similarity[row, t])
-
+    for (i, j), pr in zip(pasangan, prediksi):
+        if pr is None:
+            continue
+        c_char, t_char, pc, pt = pr
         panjang = batas[j] - batas[i]
 
-        # Skor pemilihan kandidat.
-        # Ini bukan nilai akurasi OCR.
         nilai = (
             0.65 * np.log(max(pc, 1e-6))
             + 0.35 * np.log(max(pt, 1e-6))
-            - 0.22 * abs(
-                np.log(
-                    max(panjang, 1)
-                    / max(
-                        tinggi_acuan * 0.55,
-                        1
-                    )
-                )
-            )
+            - 0.22 * abs(np.log(
+                max(panjang, 1) / max(tinggi_acuan * 0.55, 1)
+            ))
             - penalti
         )
 
-        # Penalti tambahan bila potongan jauh lebih lebar dari satu karakter.
-        # Koefisien 0.8 lama terlalu keras: huruf yang memang lebar seperti
-        # 'M', 'm', 'W' (rasio 1.0-1.3) kena penalti besar sehingga DP lebih
-        # suka memecahnya menjadi dua potongan sempit ('M' -> 'N'+'I').
-        # Koefisien 0.30 cukup untuk tetap menghukum gumpalan dua karakter,
-        # tetapi tidak lagi menghukum huruf lebar tunggal.
+        # Penalti tambahan bila potongan jauh lebih lebar dari satu
+        # karakter. Koefisien 0.30 cukup menghukum gumpalan dua karakter
+        # tanpa menghukum huruf lebar tunggal.
         if panjang > 0.85 * tinggi_acuan:
             nilai -= 0.30 * (panjang / max(tinggi_acuan, 1) - 0.85)
 
-        # Bonus kecil jika prediksi CNN dan Template Matching sepakat.
-        # Bonus per karakter dulu 0.12. Nilai itu membuat jalur yang
-        # memecah satu huruf lebar menjadi DUA potongan (mis. 'M' ->
-        # 'N'+'I') mendapat bonus dua kali dan menang tipis atas jalur
-        # 'M' utuh. Bonus 0.06 mengurangi bias fragmentasi itu sambil
-        # tetap menghargai kesepakatan CNN + Template Matching.
-        if labels[c] == label_tm[t]:
+        # Bonus kecil bila CNN dan Template Matching sepakat.
+        if c_char == t_char:
             nilai += 0.06
 
-        skor[(i, j)] = (
-            nilai,
-            labels[c],
-            label_tm[t],
-            pc,
-            pt
-        )
+        skor[(i, j)] = (nilai, c_char, t_char, pc, pt)
 
     return skor
+
+
+def skor_potongan(blob, batas, tinggi_acuan, model, labels, templates,
+                  label_tm, penalti=0.55):
+    """
+    Versi mandiri untuk SATU blob (dipakai pengujian/kompatibilitas).
+
+    Pipeline utama memakai kandidat_potongan + skor_dari_prediksi agar
+    seluruh komponen dapat diprediksi sekaligus.
+    """
+    pasangan, array = kandidat_potongan(blob, batas, tinggi_acuan)
+    if not array:
+        return {}
+    prediksi = _prediksi_banyak(
+        array, model, labels, templates, label_tm, sudah_normal=True
+    )
+    return skor_dari_prediksi(
+        batas, tinggi_acuan, pasangan, prediksi,
+        labels, label_tm, penalti
+    )
 
 
 # =========================================
@@ -482,6 +435,61 @@ def _prediksi_potongan(blob_kolom, model, labels, templates, label_tm):
     return labels[c], label_tm[t], pc, pt
 
 
+def _prediksi_banyak(daftar_potongan, model, labels, templates, label_tm,
+                     sudah_normal=False):
+    """
+    Prediksi BANYAK potongan sekaligus dalam satu panggilan model.
+
+    Memanggil model satu per satu (batch = 1) sangat lambat karena biaya
+    tetap setiap panggilan jauh lebih besar daripada biaya menghitung satu
+    gambar. Dengan menggabungkan semua potongan menjadi satu batch, waktu
+    proses turun drastis dan hasilnya identik.
+
+    sudah_normal=True dipakai bila potongan sudah berbentuk 32x32 hasil
+    normalisasi_karakter, sehingga tidak perlu dinormalisasi ulang.
+
+    Mengembalikan list dengan panjang sama seperti masukan; elemen bernilai
+    None bila potongan tidak dapat dinormalisasi.
+    """
+    hasil = [None] * len(daftar_potongan)
+    array = []
+    indeks = []
+
+    for i, pot in enumerate(daftar_potongan):
+        if pot is None or getattr(pot, "size", 0) == 0:
+            continue
+        if sudah_normal:
+            norm = pot
+        else:
+            norm = normalisasi_potongan(pot)
+        if norm is None:
+            continue
+        array.append(norm)
+        indeks.append(i)
+
+    if not array:
+        return hasil
+
+    X = np.asarray(array, dtype=np.float32)[..., None] / 255.0
+    prob = model.predict(X, batch_size=256, verbose=0)
+
+    V = X[..., 0].reshape(len(X), -1)
+    V = V / np.maximum(np.linalg.norm(V, axis=1, keepdims=True), 1e-8)
+    sim = V @ templates.T
+
+    for row, idx in enumerate(indeks):
+        c = int(np.argmax(prob[row]))
+        t = int(np.argmax(sim[row]))
+        hasil[idx] = (
+            labels[c],
+            label_tm[t],
+            float(prob[row, c]),
+            float(sim[row, t]),
+        )
+
+    return hasil
+
+
 def _pecah_lebar(blob, a, b, char_w, model, labels, templates, label_tm,
                  kedalaman=0):
     """
@@ -539,47 +547,66 @@ def _rapikan_gabung_pecah(hasil, biner, tinggi_acuan,
     ta = max(tinggi_acuan, 1.0)
     hasil = sorted(hasil, key=lambda z: (z["x1"], z["y1"]))
 
-    def prediksi(x1, y1, x2, y2):
+    def ambil(x1, y1, x2, y2):
         if x2 <= x1 or y2 <= y1:
             return None
-        pot = biner[max(0, y1):min(H, y2), max(0, x1):min(W, x2)]
-        return _prediksi_potongan(pot, model, labels, templates, label_tm)
+        return biner[max(0, y1):min(H, y2), max(0, x1):min(W, x2)]
 
+    # ---------- (A) GABUNG ----------
     busur = {"(", ")", "[", "]", "C", "c", "K", "G", "0", "O", "o", "Q"}
     huruf_bulat = {"O", "o", "0", "Q", "D", "C", "G", "c", "e", "a", "U"}
+
+    # Kumpulkan semua pasangan bersebelahan yang memenuhi syarat bentuk,
+    # lalu prediksi potongan gabungannya SEKALIGUS (satu batch). Tanpa
+    # ini, setiap pasangan memanggil model sendiri-sendiri dan proses
+    # menjadi sangat lambat.
+    kandidat_gabung = {}
+    for i in range(len(hasil) - 1):
+        cur, nxt = hasil[i], hasil[i + 1]
+        w_cur = cur["x2"] - cur["x1"]
+        w_nxt = nxt["x2"] - nxt["x1"]
+        celah = nxt["x1"] - cur["x2"]
+        lebar_gabung = w_cur + w_nxt + celah
+        if not (
+            celah <= 1
+            and w_cur < 0.60 * ta
+            and w_nxt < 0.60 * ta
+            and lebar_gabung <= 1.15 * ta
+            and cur.get("cnn") in busur
+            and nxt.get("cnn") in busur
+        ):
+            continue
+        y1 = min(cur["y1"], nxt["y1"])
+        y2 = max(cur["y2"], nxt["y2"])
+        pot = ambil(cur["x1"], y1, nxt["x2"], y2)
+        if pot is not None:
+            kandidat_gabung[i] = (y1, y2, pot)
+
+    indeks_gabung = sorted(kandidat_gabung)
+    prediksi_gabung = _prediksi_banyak(
+        [kandidat_gabung[i][2] for i in indeks_gabung],
+        model, labels, templates, label_tm,
+    )
+    hasil_gabung = dict(zip(indeks_gabung, prediksi_gabung))
+
     gabung = []
     i = 0
     while i < len(hasil):
         cur = dict(hasil[i])
-        if i + 1 < len(hasil):
-            nxt = hasil[i + 1]
-            w_cur = cur["x2"] - cur["x1"]
-            w_nxt = nxt["x2"] - nxt["x1"]
-            celah = nxt["x1"] - cur["x2"]
-            lebar_gabung = w_cur + w_nxt + celah
-            if (
-                celah <= 1
-                and w_cur < 0.60 * ta
-                and w_nxt < 0.60 * ta
-                and lebar_gabung <= 1.15 * ta
-                and cur.get("cnn") in busur
-                and nxt.get("cnn") in busur
-            ):
-                y1 = min(cur["y1"], nxt["y1"])
-                y2 = max(cur["y2"], nxt["y2"])
-                merged = prediksi(cur["x1"], y1, nxt["x2"], y2)
-                if merged is not None:
-                    c, t, pc, pt = merged
-                    if pc >= 0.55 and c in huruf_bulat:
-                        cur = {
-                            "x1": cur["x1"], "y1": y1,
-                            "x2": nxt["x2"], "y2": y2,
-                            "cnn": c, "tm": t, "pc": pc, "pt": pt,
-                            "status": "KANDIDAT",
-                        }
-                        gabung.append(cur)
-                        i += 2
-                        continue
+        merged = hasil_gabung.get(i)
+        if merged is not None:
+            c, t, pc, pt = merged
+            if pc >= 0.55 and c in huruf_bulat:
+                y1, y2, _ = kandidat_gabung[i]
+                cur = {
+                    "x1": cur["x1"], "y1": y1,
+                    "x2": hasil[i + 1]["x2"], "y2": y2,
+                    "cnn": c, "tm": t, "pc": pc, "pt": pt,
+                    "status": "KANDIDAT",
+                }
+                gabung.append(cur)
+                i += 2
+                continue
         gabung.append(cur)
         i += 1
     hasil = gabung
@@ -588,8 +615,11 @@ def _rapikan_gabung_pecah(hasil, biner, tinggi_acuan,
         ".", ",", "'", '"', "`", ":", ";", "!", "|",
         "i", "l", "1", "I", "j", "-", "~", "_",
     }
-    pecah = []
-    for s in hasil:
+
+    # ---------- (B) PECAH ----------
+    # Tahap 1: tentukan segmen yang perlu diuji beserta posisi potongnya.
+    rencana = []
+    for idx, s in enumerate(hasil):
         w = s["x2"] - s["x1"]
         pc = float(s.get("pc", 0.0) or 0.0)
         ragu = pc < 0.9 or s.get("tm") != s.get("cnn")
@@ -601,92 +631,117 @@ def _rapikan_gabung_pecah(hasil, biner, tinggi_acuan,
         #
         # Gabungan huruf sempit tidak bisa dideteksi dari lebar. Contoh
         # nyata: "In" pada "Indra" menyatu menjadi satu kotak selebar
-        # 0.47 x tinggi huruf — LEBIH SEMPIT dari median karakter,
+        # 0.47 x tinggi huruf ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â LEBIH SEMPIT dari median karakter,
         # sehingga tidak ada ambang lebar yang bisa menangkapnya.
         # Satu-satunya sinyal yang tersisa adalah keraguan model.
-        # Pemicu ini hanya dipakai bila keyakinan benar-benar rendah, dan
-        # hasil pecahannya harus jauh lebih yakin (lihat syarat di bawah),
-        # sehingga huruf yang memang dikenali yakin tidak ikut berubah.
         ragu_kuat = pc < 0.60 and w > 0.40 * ta
-        if lebar_ragu or label_mustahil or ragu_kuat:
-            pot = biner[max(0, s["y1"]):min(H, s["y2"]),
-                        max(0, s["x1"]):min(W, s["x2"])]
-            proyeksi = np.count_nonzero(pot, axis=0).astype(np.float32)
-            tengah = w // 2
-            # Jendela 35% dari tengah: cukup untuk pasangan huruf biasa,
-            # tanpa membuat potongan asal-asalan pada karakter lebar.
-            # Jendela 45% sudah dicoba dan menurunkan akurasi (CER
-            # 4.39% -> 5.94%), jadi nilai ini yang dipakai.
-            lo = max(1, tengah - int(0.35 * w))
-            hi = min(w - 1, tengah + int(0.35 * w))
-            if hi > lo:
-                # Titik potong utama = lembah tinta (paling sedikit tinta).
-                # Titik ini yang paling masuk akal secara bentuk.
-                pos_min = lo + int(np.argmin(proyeksi[lo:hi]))
+        if not (lebar_ragu or label_mustahil or ragu_kuat):
+            continue
 
-                def nilai_split(pos):
-                    if pos < 1 or pos >= w:
-                        return None
-                    kiri = prediksi(
-                        s["x1"], s["y1"], s["x1"] + pos, s["y2"]
-                    )
-                    kanan = prediksi(
-                        s["x1"] + pos, s["y1"], s["x2"], s["y2"]
-                    )
-                    if kiri is None or kanan is None:
-                        return None
-                    return (min(kiri[2], kanan[2]), pos, kiri, kanan)
+        pot = ambil(s["x1"], s["y1"], s["x2"], s["y2"])
+        if pot is None:
+            continue
+        proyeksi = np.count_nonzero(pot, axis=0).astype(np.float32)
 
-                terbaik = nilai_split(pos_min)
+        tengah = w // 2
+        # Jendela 35% dari tengah: cukup untuk pasangan huruf biasa, tanpa
+        # membuat potongan asal-asalan pada karakter lebar. Jendela 45%
+        # sudah dicoba dan menurunkan akurasi (CER 4.39% -> 5.94%).
+        lo = max(1, tengah - int(0.35 * w))
+        hi = min(w - 1, tengah + int(0.35 * w))
+        if hi <= lo:
+            continue
 
-                # Bila lembah tinta TIDAK menghasilkan dua bagian yang
-                # meyakinkan, cari beberapa titik lain di sekitar lembah.
-                # Contoh nyata pada "ei" yang menempel: lembah tinta ada di
-                # posisi yang salah ('e' + ',' keyakinan 0.58), sedangkan
-                # titik potong benar ('e' + 'i', keyakinan 1.00 dan 0.98)
-                # berada beberapa piksel di kanannya.
-                #
-                # Jumlah kandidat dibatasi agar proses tetap cepat: hanya
-                # 5 titik yang diuji, dan pencarian hanya dilakukan bila
-                # titik lembah memang meragukan.
-                perlu_cari = terbaik is None or terbaik[0] < 0.70
-                if perlu_cari and hi > lo:
-                    jumlah_coba = 5
-                    for k in range(1, jumlah_coba + 1):
-                        pos = lo + round((hi - lo) * k / (jumlah_coba + 1))
-                        calon = nilai_split(pos)
-                        if calon is None:
-                            continue
-                        if terbaik is None or calon[0] > terbaik[0]:
-                            terbaik = calon
+        pos_min = lo + int(np.argmin(proyeksi[lo:hi]))
+        posisi = [pos_min]
+        jumlah_coba = 5
+        for k in range(1, jumlah_coba + 1):
+            p = lo + round((hi - lo) * k / (jumlah_coba + 1))
+            if p not in posisi:
+                posisi.append(p)
 
-                if terbaik is not None:
-                    skor, pos, kiri, kanan = terbaik
-                    yakin_lebih_baik = skor > s.get("pc", 0.0)
-                    # Untuk label yang mustahil, kedua bagian harus wajar
-                    # (>= 0.80) karena label lama tidak bisa dipakai sebagai
-                    # pembanding. Ambang ini mencegah potongan asal-asalan
-                    # (mis. "in" terpotong menjadi 'k' + 'I' dengan 0.79).
-                    wajar = label_mustahil and skor >= 0.80
-                    # Pemicu keraguan menuntut bukti paling kuat: kedua
-                    # bagian harus benar-benar yakin.
-                    if ragu_kuat:
-                        terima = skor >= 0.85
-                    else:
-                        terima = yakin_lebih_baik or wajar
-                    if terima:
-                        for seg, pr in ((0, kiri), (pos, kanan)):
-                            c, t, pc, pt = pr
-                            x1 = s["x1"] + seg
-                            x2 = s["x1"] + pos if seg == 0 else s["x2"]
-                            pecah.append({
-                                "x1": x1, "y1": s["y1"],
-                                "x2": x2, "y2": s["y2"],
-                                "cnn": c, "tm": t, "pc": pc, "pt": pt,
-                                "status": "KANDIDAT",
-                            })
-                        continue
-        pecah.append(s)
+        rencana.append({
+            "idx": idx, "s": s, "posisi": posisi,
+            "pos_min": pos_min, "pc": pc,
+            "label_mustahil": label_mustahil, "ragu_kuat": ragu_kuat,
+        })
+
+    # Tahap 2: siapkan semua potongan (kiri & kanan) lalu prediksi
+    # SEKALIGUS. Ini bagian terbesar penghemat waktu: sebelumnya setiap
+    # posisi memanggil model dua kali secara terpisah.
+    potongan = []
+    for r in rencana:
+        s = r["s"]
+        for pos in r["posisi"]:
+            potongan.append(ambil(s["x1"], s["y1"], s["x1"] + pos, s["y2"]))
+            potongan.append(ambil(s["x1"] + pos, s["y1"], s["x2"], s["y2"]))
+
+    prediksi_split = _prediksi_banyak(
+        potongan, model, labels, templates, label_tm
+    )
+
+    # Tahap 3: susun tabel skor per posisi untuk tiap segmen.
+    kursor = 0
+    tabel_skor = {}
+    for r in rencana:
+        tabel = {}
+        for pos in r["posisi"]:
+            kiri = prediksi_split[kursor]
+            kursor += 1
+            kanan = prediksi_split[kursor]
+            kursor += 1
+            if kiri is None or kanan is None:
+                continue
+            tabel[pos] = (min(kiri[2], kanan[2]), pos, kiri, kanan)
+        tabel_skor[r["idx"]] = tabel
+
+    # Tahap 4: putuskan per segmen memakai hasil batch.
+    rencana_per_idx = {r["idx"]: r for r in rencana}
+    pecah = []
+    for idx, s in enumerate(hasil):
+        r = rencana_per_idx.get(idx)
+        if r is None:
+            pecah.append(s)
+            continue
+
+        tabel = tabel_skor.get(idx, {})
+        terbaik = tabel.get(r["pos_min"])
+        # Bila lembah tinta TIDAK menghasilkan dua bagian yang meyakinkan,
+        # cari titik lain di sekitar lembah (contoh: "ei" yang menempel).
+        if terbaik is None or terbaik[0] < 0.70:
+            for calon in tabel.values():
+                if terbaik is None or calon[0] > terbaik[0]:
+                    terbaik = calon
+
+        if terbaik is None:
+            pecah.append(s)
+            continue
+
+        skor, pos, kiri, kanan = terbaik
+        yakin_lebih_baik = skor > r["pc"]
+        # Untuk label yang mustahil, kedua bagian harus wajar (>= 0.80).
+        wajar = r["label_mustahil"] and skor >= 0.80
+        # Pemicu keraguan menuntut bukti paling kuat.
+        if r["ragu_kuat"]:
+            terima = skor >= 0.85
+        else:
+            terima = yakin_lebih_baik or wajar
+
+        if not terima:
+            pecah.append(s)
+            continue
+
+        for seg, pr in ((0, kiri), (pos, kanan)):
+            c, t, pc, pt = pr
+            x1 = s["x1"] + seg
+            x2 = s["x1"] + pos if seg == 0 else s["x2"]
+            pecah.append({
+                "x1": x1, "y1": s["y1"],
+                "x2": x2, "y2": s["y2"],
+                "cnn": c, "tm": t, "pc": pc, "pt": pt,
+                "status": "KANDIDAT",
+            })
+
     hasil = sorted(pecah, key=lambda z: (z["x1"], z["y1"]))
     return hasil
 
@@ -855,129 +910,134 @@ def segmentasi_karakter(
     else:
         char_w_est = 0.55 * tinggi_acuan
 
-    hasil = []
+    # ---------------------------------------------------------------
+    # Tahap A: tentukan batas tiap komponen dan kumpulkan potongan
+    # ---------------------------------------------------------------
+    # Seluruh prediksi dijalankan dalam beberapa batch besar, bukan satu
+    # per komponen. Inilah sumber utama percepatan: sebelumnya model
+    # dipanggil sekali untuk setiap komponen (belasan kali per field).
+    rencana = []
+    patch_guard = []
 
     for x, y, w, h in komponen:
-        blob = biner[
-            y:y+h,
-            x:x+w
-        ]
+        blob = biner[y:y + h, x:x + w]
+
         # Komponen dicoba dipisah bila lebih lebar dari SATU karakter.
-        #
         # Dua ukuran dipakai sekaligus:
         #   - relatif tinggi huruf (1.10): menangkap gabungan yang jelas;
-        #   - relatif lebar median karakter pada baris ini (1.35): menangkap
-        #     gabungan huruf SEMPIT yang secara absolut tidak lebar.
-        # Contoh nyata: "rt" pada "Arta" dan "is" pada "Muis" hanya
-        # ~0.8-1.0 x tinggi huruf sehingga lolos dari ambang 1.10 dan
-        # keluar sebagai satu kotak (terbaca 'n' dan 'b'). Dengan
-        # pembanding median baris, gabungan semacam itu tetap terdeteksi.
+        #   - relatif lebar median karakter (1.35): menangkap gabungan
+        #     huruf SEMPIT (mis. "rt", "is") yang secara absolut tidak lebar.
         is_lebar = (
-            (
-                w > AMBANG_LEBAR_KOMPONEN * tinggi_acuan
-                or w > 1.35 * char_w_est
-            )
+            (w > AMBANG_LEBAR_KOMPONEN * tinggi_acuan
+             or w > 1.35 * char_w_est)
             and h > 0.40 * tinggi_acuan
         )
 
-        # Jaring pengaman untuk aturan baru (lebar vs median karakter).
-        #
-        # Aturan lama (w > 1.10 x tinggi) tetap berlaku apa adanya. Aturan
-        # tambahan hanya menurunkan ambang untuk komponen yang belum lebar
-        # secara absolut, sehingga huruf tunggal seperti 'a', 's', 'M'
-        # bisa ikut terkirim ke pemisah. Karena itu, pada zona itu komponen
-        # yang SUDAH dikenali yakin sebagai satu karakter tidak dipecah.
+        # Jaring pengaman: pada zona aturan baru, komponen yang sudah
+        # dikenali yakin sebagai satu karakter tidak dipecah.
+        idx_guard = None
         if is_lebar and w <= AMBANG_LEBAR_KOMPONEN * tinggi_acuan:
-            cek = _prediksi_potongan(
-                blob, model, labels, templates, label_tm
-            )
+            pot_utuh = normalisasi_potongan(blob)
+            if pot_utuh is not None:
+                idx_guard = len(patch_guard)
+                patch_guard.append(pot_utuh)
+
+        rencana.append({
+            "x": x, "y": y, "w": w, "h": h, "blob": blob,
+            "is_lebar": is_lebar, "idx_guard": idx_guard,
+        })
+
+    # Satu batch untuk seluruh pemeriksaan jaring pengaman.
+    pred_guard = _prediksi_banyak(
+        patch_guard, model, labels, templates, label_tm, sudah_normal=True
+    )
+
+    # ---------------------------------------------------------------
+    # Tahap B: finalkan batas + kumpulkan kandidat potongan
+    # ---------------------------------------------------------------
+    semua_potongan = []
+
+    for r in rencana:
+        blob, w = r["blob"], r["w"]
+        is_lebar = r["is_lebar"]
+
+        if r["idx_guard"] is not None:
+            cek = pred_guard[r["idx_guard"]]
             if cek is not None and cek[2] >= 0.90:
                 is_lebar = False
 
-        if is_lebar:
-            batas = calon_batas(
-                blob,
-                tinggi_acuan
-            )
-        else:
-            batas = [0, w]
+        r["is_lebar"] = is_lebar
+        batas = calon_batas(blob, tinggi_acuan) if is_lebar else [0, w]
+        r["batas"] = batas
 
-        # Objek yang jauh lebih lebar dari satu karakter pasti berisi
-        # beberapa karakter. Penalti per-karakter diturunkan untuk blob
-        # lebar agar DP rela memecah gumpalan menjadi beberapa karakter.
+        pasangan, array = kandidat_potongan(blob, batas, tinggi_acuan)
+        r["pasangan"] = pasangan
+        r["awal"] = len(semua_potongan)
+        semua_potongan.extend(array)
+
+        # Penalti per-karakter diturunkan untuk blob lebar agar DP rela
+        # memecah gumpalan menjadi beberapa karakter.
         rasio_lebar = w / max(tinggi_acuan, 1.0)
         if rasio_lebar > 1.5:
-            penalti_blob = 0.15
+            r["penalti"] = 0.15
         elif rasio_lebar > 1.2:
-            penalti_blob = 0.35
+            r["penalti"] = 0.35
         else:
-            penalti_blob = 0.55
+            r["penalti"] = 0.55
 
-        nilai = skor_potongan(
-            blob,
-            batas,
-            tinggi_acuan,
-            model,
-            labels,
-            templates,
-            label_tm,
-            penalti=penalti_blob
+    # Satu batch untuk seluruh kandidat potongan di field ini.
+    pred_pasangan = _prediksi_banyak(
+        semua_potongan, model, labels, templates, label_tm, sudah_normal=True
+    )
+
+    # ---------------------------------------------------------------
+    # Tahap C: skor + dynamic programming per komponen
+    # ---------------------------------------------------------------
+    hasil = []
+
+    for r in rencana:
+        x, y, w, h = r["x"], r["y"], r["w"], r["h"]
+        blob, batas = r["blob"], r["batas"]
+        awal = r["awal"]
+        pred_slice = pred_pasangan[awal:awal + len(r["pasangan"])]
+
+        nilai = skor_dari_prediksi(
+            batas, tinggi_acuan, r["pasangan"], pred_slice,
+            labels, label_tm, penalti=r["penalti"]
         )
 
-        potong = pilih_batas(
-            batas,
-            nilai
-        )
+        potong = pilih_batas(batas, nilai)
 
         if not potong:
-            # DP tidak menemukan satu pun kandidat valid. Penyebab yang
-            # paling sering: lebar komponen sedikit melebihi batas lebar
-            # satu karakter (0.95 x tinggi acuan), sehingga seluruh
-            # komponen tidak pernah ikut dipertimbangkan. Contohnya huruf
-            # 'P' pada "Pcs" yang lebarnya ~1.0 x tinggi huruf.
-            # Daripada menandai segmen '?' tanpa label, komponen utuh
-            # diklasifikasikan sekali agar tetap ada prediksi.
+            # DP tidak menemukan satu pun kandidat valid. Komponen utuh
+            # tetap diklasifikasikan agar selalu ada prediksi.
             utuh = _prediksi_potongan(
                 blob, model, labels, templates, label_tm
             )
 
             if utuh is None:
                 hasil.append({
-                    "x1": x,
-                    "y1": y,
-                    "x2": x+w,
-                    "y2": y+h,
-                    "cnn": "?",
-                    "tm": "?",
-                    "pc": 0.0,
-                    "pt": 0.0,
-                    "status": "BELUM_TERURAI"
+                    "x1": x, "y1": y, "x2": x + w, "y2": y + h,
+                    "cnn": "?", "tm": "?", "pc": 0.0, "pt": 0.0,
+                    "status": "BELUM_TERURAI",
                 })
                 continue
 
             c_utuh, t_utuh, pc_utuh, pt_utuh = utuh
-
             hasil.append({
-                "x1": x,
-                "y1": y,
-                "x2": x+w,
-                "y2": y+h,
-                "cnn": c_utuh,
-                "tm": t_utuh,
-                "pc": pc_utuh,
-                "pt": pt_utuh,
-                "status": "KANDIDAT"
+                "x1": x, "y1": y, "x2": x + w, "y2": y + h,
+                "cnn": c_utuh, "tm": t_utuh,
+                "pc": pc_utuh, "pt": pt_utuh,
+                "status": "KANDIDAT",
             })
             continue
 
         for a, b, info in potong:
             # Pecah lagi hanya bila segmen memang cukup lebar untuk memuat
-            # lebih dari satu karakter. Syarat lebar dijaga agar huruf
+            # lebih dari satu karakter. Syarat lebar menjaga agar huruf
             # tunggal yang memang lebar (mis. 'M', 'm', 'W') tidak ikut
-            # terpecah menjadi dua potongan. Ambang 1.15 dulu terlalu
-            # rendah: 'M' (rasio ~1.24) masih dianggap "cukup lebar" dan
-            # dipaksa pecah jadi 'N'+'I'. Ambang 1.40 melindungi huruf
-            # lebar tunggal tetapi tetap memecah sisa gumpalan dua karakter.
+            # terpecah. Ambang 45% jendela sudah diuji dan menurunkan
+            # akurasi, jadi 35% yang dipakai.
             lebar_seg = b - a
             cukup_lebar = (
                 lebar_seg > 1.45 * char_w_est
@@ -995,15 +1055,10 @@ def segmentasi_karakter(
             for aa, bb, info2 in bagian:
                 _, c, t, pc, pt = info2
                 hasil.append({
-                    "x1": x + aa,
-                    "y1": y,
-                    "x2": x + bb,
-                    "y2": y + h,
-                    "cnn": c,
-                    "tm": t,
-                    "pc": pc,
-                    "pt": pt,
-                    "status": "KANDIDAT"
+                    "x1": x + aa, "y1": y,
+                    "x2": x + bb, "y2": y + h,
+                    "cnn": c, "tm": t, "pc": pc, "pt": pt,
+                    "status": "KANDIDAT",
                 })
 
     hasil = sorted(
