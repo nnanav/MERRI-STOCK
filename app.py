@@ -709,6 +709,18 @@ def halaman_preprocessing():
     c2.image(otsu, caption="Binarisasi Otsu", width="stretch")
 
 
+# Nama tampilan untuk setiap jenis field, dipakai halaman Segmentasi.
+LABEL_JENIS = {
+    "nomor": "Nomor Nota",
+    "penerima": "Nama Penerima",
+    "proyek": "Proyek",
+    "produk": "Nama Produk",
+    "jumlah": "Jumlah",
+    "satuan": "Satuan",
+    "harga": "Harga Satuan",
+}
+
+
 def halaman_segmentasi():
     st.header("Segmentasi")
     if st.session_state.get("gambar_bgr") is None:
@@ -769,49 +781,126 @@ def halaman_segmentasi():
         vis_field = gambar_kotak_field(det["kecil"], det["fields"])
     st.image(gambar_rgb(vis_field), use_container_width=True)
 
-    st.subheader("Crop dan segmentasi per karakter")
+    st.subheader("Segmentasi per karakter")
     st.caption(
-        "Kotak berasal dari pipeline pengenalan sebenarnya (CNN + Template "
-        "Matching), target satu bounding box untuk satu karakter."
+        "Satu bounding box untuk satu karakter. Kotak berasal dari pipeline "
+        "pengenalan sebenarnya (CNN + Template Matching)."
     )
+
+    # Hitung seluruh field lebih dulu agar ringkasan di atas bisa ditampilkan
+    # tanpa perlu membuka satu per satu. Hasil segmentasi sudah di-cache,
+    # sehingga langkah ini tidak memperlambat halaman.
+    data_field = []
     for f in det["fields"]:
-        with st.expander(f["label"]):
-            crop = f["crop_show"]
-            if crop is None or getattr(crop, "size", 0) == 0:
-                st.warning("Crop field ini tidak tersedia.")
-                continue
+        crop = f.get("crop_show")
+        if crop is None or getattr(crop, "size", 0) == 0:
+            data_field.append({
+                "field": f, "crop": None, "vis": None,
+                "karakter": [], "teks": "", "ada": False,
+            })
+            continue
+        vis, karakter, _biner, teks, _detail = segmen_field(
+            crop, f.get("jenis")
+        )
+        data_field.append({
+            "field": f, "crop": crop, "vis": vis,
+            "karakter": karakter, "teks": teks, "ada": True,
+        })
 
-            vis, karakter, _biner, teks, _detail = segmen_field(
-                crop, f.get("jenis")
+    total_field = len(data_field)
+    total_kotak = sum(len(d["karakter"]) for d in data_field)
+    field_terbaca = sum(1 for d in data_field if d["teks"])
+    field_kosong = sum(1 for d in data_field if not d["ada"])
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Field tersegmentasi", total_field)
+    m2.metric("Total kotak karakter", total_kotak)
+    m3.metric("Field terbaca", f"{field_terbaca}/{total_field}")
+    m4.metric("Field tanpa crop", field_kosong)
+
+    st.markdown("**Ringkasan seluruh field**")
+    st.dataframe(
+        [
+            {
+                "Field": d["field"]["label"],
+                "Jenis": LABEL_JENIS.get(d["field"].get("jenis"), "-"),
+                "Kotak": len(d["karakter"]),
+                "Hasil OCR": d["teks"] or "(belum terbaca)",
+            }
+            for d in data_field
+        ],
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Field": st.column_config.TextColumn("Field", width="medium"),
+            "Jenis": st.column_config.TextColumn("Jenis", width="small"),
+            "Kotak": st.column_config.NumberColumn("Kotak", width="small"),
+            "Hasil OCR": st.column_config.TextColumn(
+                "Hasil OCR", width="large"
+            ),
+        },
+    )
+
+    st.markdown("**Detail per field**")
+    st.caption(
+        "Setiap kartu menampilkan citra asli field, bounding box tiap "
+        "karakter, dan urutan karakter hasil segmentasi."
+    )
+
+    # Tampilkan sebagai kartu, dikelompokkan per jenis field, dua kolom.
+    urutan_jenis = ["nomor", "penerima", "proyek", "produk", "jumlah",
+                    "satuan", "harga"]
+    for jenis in urutan_jenis:
+        kelompok = [d for d in data_field if d["field"].get("jenis") == jenis]
+        if not kelompok:
+            continue
+
+        st.markdown(f"##### {LABEL_JENIS.get(jenis, jenis)}")
+        for mulai in range(0, len(kelompok), 2):
+            kolom = st.columns(2)
+            for kol, d in zip(kolom, kelompok[mulai:mulai + 2]):
+                with kol:
+                    _kartu_field(d)
+
+
+def _kartu_field(d):
+    """Satu kartu detail segmentasi untuk satu field."""
+    f = d["field"]
+    with st.container(border=True):
+        if not d["ada"]:
+            st.markdown(f"**{f['label']}**")
+            st.warning("Crop field ini tidak tersedia.")
+            return
+
+        n_kotak = len(d["karakter"])
+        st.markdown(
+            f"**{f['label']}**  \n"
+            f"<span style='color:#666;font-size:0.85em'>"
+            f"{n_kotak} kotak karakter</span>",
+            unsafe_allow_html=True,
+        )
+
+        st.caption("Citra asli field")
+        st.image(gambar_rgb(d["crop"]), use_container_width=True)
+
+        if d["vis"] is not None:
+            st.caption(f"Bounding box karakter ({n_kotak} kotak)")
+            st.image(gambar_rgb(d["vis"]), use_container_width=True)
+
+        if d["teks"]:
+            st.markdown("Hasil OCR")
+            st.code(d["teks"], language=None)
+        else:
+            st.caption("Hasil OCR: belum terbaca")
+
+        if d["karakter"]:
+            urutan = " ".join(
+                k.get("final") or k.get("cnn") or "?"
+                for k in d["karakter"]
             )
+            st.caption("Urutan karakter")
+            st.code(urutan, language=None)
 
-            # Tampilan memakai citra asli saja (tanpa gambar binerisasi),
-            # sesuai permintaan: cukup bounding box di atas gambar asli.
-            st.caption("Gambar field sebelum segmentasi")
-            st.image(gambar_rgb(crop), use_container_width=True)
-
-            st.caption(f"Bounding box karakter ({len(karakter)} kotak)")
-            if vis is not None:
-                st.image(gambar_rgb(vis), use_container_width=True)
-
-            if teks:
-                st.caption(f"Hasil OCR: {teks}")
-
-            if karakter:
-                st.caption("Urutan karakter hasil segmentasi:")
-                st.dataframe(
-                    [
-                        {
-                            "No": i,
-                            "Karakter": k.get("final") or k.get("cnn") or "?",
-                        }
-                        for i, k in enumerate(karakter, 1)
-                    ],
-                    use_container_width=True,
-                    hide_index=True,
-                )
-                if teks:
-                    st.markdown(f"**Teks hasil segmentasi:** `{teks}`")
 
 
 def kenali_satu(crop, pakai_clahe, jenis=None):
