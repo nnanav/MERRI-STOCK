@@ -1240,14 +1240,8 @@ JENIS_DIEVALUASI = ("nomor", "penerima", "proyek", "produk", "jumlah", "harga")
 def halaman_evaluasi():
     st.header("Evaluasi Hasil Pengenalan OCR")
     st.caption(
-        "Setiap field dinilai secara utuh: teks hasil OCR akhir dibandingkan "
-        "dengan Ground Truth nota asli. Metrik yang dipakai hanya CER "
-        "(Character Error Rate)."
-    )
-    st.latex(r"CER = \frac{S + D + I}{N} \times 100\%")
-    st.caption(
-        "S = karakter diganti (substitution), D = karakter hilang (deletion), "
-        "I = karakter tambahan (insertion), N = jumlah karakter Ground Truth."
+        "Setiap field dibandingkan secara utuh antara Ground Truth nota asli "
+        "dan hasil OCR. Status Benar bila seluruh isi field sama persis."
     )
 
     if st.session_state.get("gambar_bgr") is None:
@@ -1266,7 +1260,6 @@ def halaman_evaluasi():
 
     nama = st.session_state.get("nama_file", "")
     baris = []
-    rincian = []
     benar = 0
     salah = 0
     tanpa_gt = 0
@@ -1282,21 +1275,20 @@ def halaman_evaluasi():
 
         if not normalisasi_teks(gt):
             # Ground truth kosong: field tidak bisa dinilai. Baris tetap
-            # ditampilkan agar transparan, tetapi tidak dihitung di ringkasan
-            # dan tidak memicu pembagian dengan nol.
+            # ditampilkan agar evaluasi transparan.
             tanpa_gt += 1
             baris.append({
                 "Field": f["label"],
                 "Ground Truth": "(tidak tersedia)",
                 "Hasil OCR": teks or "(kosong)",
-                "CER (%)": None,
-                "Status": "➖ Tanpa GT",
+                "Status": "Tanpa GT",
             })
             continue
 
-        r = hitung_cer_rinci(gt, teks)
-        # Status ditentukan exact match: CER 0% -> Benar, selain itu -> Salah.
-        cocok = r["cer"] == 0.0
+        # Status ditentukan dari perbandingan teks utuh: sama persis atau
+        # tidak. Normalisasi hanya merapikan spasi, bukan mengubah huruf,
+        # angka, atau tanda baca.
+        cocok = normalisasi_teks(gt) == normalisasi_teks(teks)
         benar += int(cocok)
         salah += int(not cocok)
 
@@ -1304,24 +1296,10 @@ def halaman_evaluasi():
             "Field": f["label"],
             "Ground Truth": gt,
             "Hasil OCR": teks or "(kosong)",
-            "CER (%)": round(r["cer"] * 100, 2),
-            "Status": "✅ Benar" if cocok else "❌ Salah",
-        })
-        rincian.append({
-            "Field": f["label"],
-            "N (GT)": r["n"],
-            "S": r["s"],
-            "D": r["d"],
-            "I": r["i"],
-            "S+D+I": r["jarak"],
-            "CER (%)": round(r["cer"] * 100, 2),
+            "Status": "Benar" if cocok else "Salah",
         })
 
     st.subheader("Hasil evaluasi per field")
-    st.caption(
-        "Seluruh field ditampilkan, baik yang benar maupun yang masih salah. "
-        "Teks Ground Truth dan hasil OCR ditampilkan utuh."
-    )
     st.dataframe(
         baris,
         use_container_width=True,
@@ -1334,49 +1312,24 @@ def halaman_evaluasi():
             "Hasil OCR": st.column_config.TextColumn(
                 "Hasil OCR", width="large"
             ),
-            "CER (%)": st.column_config.NumberColumn(
-                "CER (%)", format="%.2f"
-            ),
             "Status": st.column_config.TextColumn("Status", width="small"),
         },
     )
-    st.caption("✅ Benar = CER 0% (teks sama persis) · ❌ Salah = CER > 0%.")
 
     dievaluasi = benar + salah
     akurasi = (benar / dievaluasi * 100.0) if dievaluasi else 0.0
-    nilai_cer = [b["CER (%)"] for b in baris if b["CER (%)"] is not None]
-    rata_cer = sum(nilai_cer) / len(nilai_cer) if nilai_cer else None
 
     st.subheader("Ringkasan")
-    k1, k2, k3, k4 = st.columns(4)
+    k1, k2, k3 = st.columns(3)
     k1.metric("Field benar", benar)
     k2.metric("Field salah", salah)
-    k3.metric("Exact-match field accuracy", f"{akurasi:.2f}%")
-    k4.metric("Rata-rata CER", "-" if rata_cer is None else f"{rata_cer:.2f}%")
+    k3.metric("Persentase benar", f"{akurasi:.2f}%")
 
-    st.caption(
-        "Field dihitung benar hanya bila seluruh isinya sama persis dengan "
-        "Ground Truth. Satu karakter berbeda sudah membuat field berstatus "
-        "Salah, meskipun nilai CER-nya kecil."
-    )
     if tanpa_gt:
         st.info(
             f"{tanpa_gt} field tidak memiliki Ground Truth sehingga tidak "
             "dihitung dalam ringkasan."
         )
-
-    with st.expander("Rincian operasi CER (S, D, I, N) per field"):
-        st.dataframe(rincian, use_container_width=True, hide_index=True)
-        st.caption(
-            "S = karakter diganti, D = karakter hilang, I = karakter "
-            "tambahan, N = jumlah karakter Ground Truth."
-        )
-
-    st.caption(
-        "Normalisasi teks: spasi berlebih dirapikan dan spasi tepi dibuang, "
-        "baik pada Ground Truth maupun hasil OCR. Huruf, angka, dan tanda "
-        "baca tidak diubah sehingga perbedaan sekecil apa pun tetap terhitung."
-    )
 
 
 # Routing enam halaman
