@@ -25,6 +25,10 @@ Buka browser pada alamat yang ditampilkan (biasanya http://localhost:8501).
 6. **Hasil Ekstraksi** - periksa dan koreksi hasil OCR, lalu simpan/unduh
 7. **Evaluasi** - tabel per field (Field, Ground Truth, Hasil OCR, Status)
 
+Setiap halaman menampilkan **caption singkat** berisi fungsi, metode yang
+dipakai, dan tujuan tahap tersebut, sehingga alur dapat dijelaskan langsung
+dari layar saat presentasi.
+
 ## Struktur Folder
 
 ```

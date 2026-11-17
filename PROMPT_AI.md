@@ -48,18 +48,32 @@ angka, nama file, nama fungsi, atau urutan tahap.
 
 1. **Business Understanding** — gambaran masalah, tujuan, alur sistem, dan
    data latih yang dipakai.
-2. **Upload Nota** — unggah satu gambar nota (JPG/PNG), lalu klik Proses Nota
-   untuk mendeteksi field.
-3. **Preprocessing** — crop kertas nota, koreksi perspektif, lalu peningkatan
-   kualitas gambar sebelum pengenalan.
-4. **Segmentasi Karakter** — pemisahan teks tiap field menjadi karakter
-   beserta kotak batasnya.
-5. **Pengenalan Karakter** — hasil pengenalan tiap karakter menjadi teks per
-   field (Template Matching + CNN).
+2. **Upload Nota** — unggah satu gambar nota (JPG/PNG), lalu klik Proses Nota.
+   Proses ini mendeteksi baris teks dengan adaptive threshold dan mencari
+   lokasi field memakai connected components.
+3. **Preprocessing** — menyiapkan gambar sebelum pengenalan: kertas nota
+   dipotong dan diluruskan, kontras dinaikkan, lalu citra dibinerkan.
+   Rincian per bagian:
+   - Crop dan koreksi perspektif: batas kertas dicari dengan ambang Otsu dan
+     cadangan tepi Canny, lalu diluruskan dengan transformasi perspektif
+     empat titik sudut.
+   - Peningkatan kualitas: Contrast Stretching pada kanal luminansi agar
+     tulisan lebih tegas tanpa memperkuat noise kertas.
+   - Binerisasi: grayscale lalu ambang Otsu, sehingga tinta hitam dan latar
+     putih.
+4. **Segmentasi Karakter** — teks tiap field dipisah menjadi satu kotak per
+   karakter memakai projection profile (hitungan piksel tinta per kolom);
+   bila karakter menempel, Dynamic Programming memilih batas potong terbaik.
+5. **Pengenalan Karakter** — tiap potongan diseragamkan menjadi 32x32 piksel,
+   lalu dikenali CNN sebagai penentu label dengan Template Matching sebagai
+   pendukung; hasilnya disusun menjadi teks per field.
 6. **Hasil Ekstraksi** — periksa dan koreksi informasi transaksi sebelum
-   disimpan.
+   disimpan. Simpan Data memvalidasi isian lalu menyimpannya ke SQLite;
+   Unduh Hasil menghasilkan CSV satu baris per produk dan aktif setelah data
+   tersimpan.
 7. **Evaluasi** — perbandingan hasil OCR dengan Ground Truth nota asli per
-   field; status Benar bila seluruh isi field sama persis.
+   field; status Benar bila seluruh isi field sama persis. Ringkasan dihitung
+   dari exact match per field.
 
 ### Teknologi
 

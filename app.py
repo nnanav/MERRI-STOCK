@@ -597,8 +597,9 @@ def _gambar_kotak(cimg, karakter):
 def halaman_upload():
     st.header("Upload Nota")
     st.caption(
-        "Unggah satu gambar nota (jpg/png), lalu klik Proses Nota untuk "
-        "mendeteksi field."
+        "Unggah satu gambar nota (JPG/PNG), lalu klik Proses Nota. Proses ini "
+        "mendeteksi baris teks dengan adaptive threshold dan mencari lokasi "
+        "field memakai connected components."
     )
 
     berkas = st.file_uploader(
@@ -665,9 +666,17 @@ def halaman_upload():
 
     st.success(f"Nota: {nama}")
     st.image(gambar_rgb(gambar), use_container_width=True)
+    st.caption(
+        "Gambar asli hasil unggahan, belum dipotong maupun diperbaiki "
+        "kualitasnya. Perbaikan dilakukan pada halaman Preprocessing."
+    )
 
     st.divider()
     kol = st.columns([1, 2])
+    st.caption(
+        "Proses Nota memotong kertas nota, meluruskan perspektif, lalu "
+        "menyimpan hasil deteksi field untuk halaman berikutnya."
+    )
     if kol[0].button("Proses Nota", type="primary", key="proses_nota"):
         with st.spinner("Memproses nota (deteksi field)..."):
             st.session_state["deteksi"] = jalankan_deteksi(gambar)
@@ -686,8 +695,9 @@ def halaman_upload():
 def halaman_preprocessing():
     st.header("Preprocessing")
     st.caption(
-        "Crop kertas nota, koreksi perspektif, lalu peningkatan kualitas "
-        "gambar sebelum pengenalan."
+        "Menyiapkan gambar sebelum pengenalan: kertas nota dipotong dan "
+        "diluruskan, kontras dinaikkan, lalu citra dibinerkan agar tulisan "
+        "terpisah dari latar."
     )
     gambar = st.session_state.get("gambar_bgr")
     if gambar is None:
@@ -706,17 +716,30 @@ def halaman_preprocessing():
     tampil = pp.get("tampil", hasil)
 
     st.subheader("1. Crop dan koreksi perspektif")
+    st.caption(
+        "Batas kertas dicari dengan ambang Otsu dan cadangan tepi Canny, lalu "
+        "gambar dipotong dan diluruskan memakai transformasi perspektif empat "
+        "titik sudut agar teks sejajar."
+    )
     a, b = st.columns(2)
     a.image(gambar_rgb(pp["asli"]), caption="Nota asli", width="stretch")
     b.image(gambar_rgb(pp["crop"]), caption="Hasil crop kertas nota",
             width="stretch")
 
     st.subheader("2. Peningkatan kualitas gambar")
-    st.caption(f"Metode yang dipakai: {pp['metode']}.")
+    st.caption(
+        f"Metode yang dipakai: {pp['metode']}. Kontras dinaikkan pada kanal "
+        "luminansi agar tulisan lebih tegas tanpa memperkuat noise kertas."
+    )
     st.image(gambar_rgb(tampil), caption="Hasil akhir preprocessing",
              width="stretch")
 
     st.subheader("3. Binerisasi")
+    st.caption(
+        "Citra diubah ke grayscale lalu dibinerkan dengan ambang Otsu, "
+        "sehingga tinta menjadi hitam dan latar putih sebagai dasar "
+        "pemisahan karakter."
+    )
     abu = cv2.cvtColor(tampil, cv2.COLOR_BGR2GRAY)
     _, otsu = cv2.threshold(
         abu, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
@@ -753,7 +776,13 @@ JENIS_TAMPIL = tuple(jenis for jenis, _ in TAB_FIELD)
 def halaman_segmentasi():
     st.header("Segmentasi Karakter")
     st.caption(
-        "Pemisahan teks tiap field menjadi karakter beserta kotak batasnya."
+        "Teks tiap field dipisah menjadi satu kotak per karakter memakai "
+        "projection profile, yaitu hitungan piksel tinta per kolom. Bila "
+        "karakter menempel, Dynamic Programming memilih batas potong terbaik."
+    )
+    st.caption(
+        "Setiap potongan karakter di bawah ini menjadi masukan halaman "
+        "Pengenalan Karakter."
     )
 
     if st.session_state.get("gambar_bgr") is None:
@@ -895,8 +924,9 @@ def jalankan_ocr_semua(det, sertakan_clahe):
 def halaman_pengenalan():
     st.header("Pengenalan Karakter")
     st.caption(
-        "Hasil pengenalan tiap karakter menjadi teks per field "
-        "(Template Matching + CNN)."
+        "Tiap potongan karakter diseragamkan menjadi 32x32 piksel, lalu "
+        "dikenali CNN sebagai penentu label dengan Template Matching sebagai "
+        "pendukung. Hasilnya disusun menjadi teks per field."
     )
 
     if st.session_state.get("gambar_bgr") is None:
@@ -917,9 +947,8 @@ def halaman_pengenalan():
     hasil = st.session_state["ocr_semua"]
 
     st.caption(
-        "Segmentasi menemukan kandidat karakter, Template Matching mencocokkan "
-        "polanya, dan CNN mengenali tiap karakter. Pilih tab field untuk "
-        "melihat teks hasil OCR."
+        "Pilih tab field untuk melihat teks hasil OCR. Teks ini yang dipakai "
+        "pada halaman Hasil Ekstraksi dan Evaluasi."
     )
 
     per_jenis = {}
@@ -1081,9 +1110,8 @@ def halaman_hasil_ekstraksi():
             "perspektif dan peningkatan kualitas, bukan foto unggahan asli. " )
             
         st.caption(
-            "Nilai awal setiap isian diambil dari hasil OCR halaman "
-            "Pengenalan Karakter. Mengubah isian di sini tidak mengubah "
-            "hasil OCR maupun halaman Evaluasi."
+            "Mengubah isian di sini tidak mengubah hasil OCR maupun halaman "
+            "Evaluasi, karena koreksi disimpan terpisah."
         )
 
     # Kunci widget memakai nama berkas, sehingga mengunggah nota baru
@@ -1091,7 +1119,10 @@ def halaman_hasil_ekstraksi():
     kunci = f"ekstraksi_{nama}"
 
     st.subheader("Informasi Transaksi")
-    st.caption("Ubah isian yang tidak sesuai dengan nota, lalu simpan.")
+    st.caption(
+        "Nilai awal diambil dari hasil OCR; perbaiki yang tidak sesuai dengan "
+        "nota. Nomor Nota, Nama Penerima, dan Proyek wajib diisi."
+    )
 
     nomor = st.text_input(
         "Nomor Nota", value=_teks_ocr(hasil, "nomor"), key=f"{kunci}_nomor"
@@ -1107,8 +1138,9 @@ def halaman_hasil_ekstraksi():
 
     st.subheader("Produk")
     st.caption(
-        "Satu baris untuk satu produk. Tambah atau hapus baris sesuai isi "
-        "nota. Jumlah harus angka positif, harga satuan tidak negatif."
+        "Satu baris untuk satu produk; tambah atau hapus baris sesuai isi "
+        "nota. Jumlah harus angka positif dan harga satuan tidak negatif, "
+        "dengan format Indonesia seperti 9.000 atau 10.550."
     )
 
     awal = _produk_dari_ocr(det, hasil)
@@ -1160,6 +1192,11 @@ def halaman_hasil_ekstraksi():
     }
 
     st.divider()
+    st.caption(
+        "Simpan Data memvalidasi isian lalu menyimpannya ke basis data SQLite. "
+        "Unduh Hasil menghasilkan CSV satu baris per produk dan aktif setelah "
+        "data tersimpan."
+    )
     kol_simpan, kol_unduh = st.columns(2)
 
     if kol_simpan.button("Simpan Data", type="primary", key=f"{kunci}_simpan"):
@@ -1551,6 +1588,10 @@ def halaman_evaluasi():
         })
 
     st.subheader("Hasil evaluasi per field")
+    st.caption(
+        "Ground Truth adalah acuan yang dibaca manual dari nota asli, "
+        "sedangkan Hasil OCR adalah keluaran sistem."
+    )
     st.dataframe(
         baris,
         use_container_width=True,
@@ -1571,6 +1612,10 @@ def halaman_evaluasi():
     akurasi = (benar / dievaluasi * 100.0) if dievaluasi else 0.0
 
     st.subheader("Ringkasan")
+    st.caption(
+        "Ringkasan dihitung dari exact match per field. Field tanpa Ground "
+        "Truth tidak ikut dihitung."
+    )
     k1, k2, k3 = st.columns(3)
     k1.metric("Field benar", benar)
     k2.metric("Field salah", salah)
