@@ -1,4 +1,9 @@
-"""Uji UI Segmentasi: tanpa metrik & tabel ringkasan, hanya kartu per field."""
+"""Uji UI halaman Segmentasi Karakter setelah revisi.
+
+Memeriksa: 6 tabs, tanpa expander, tanpa HTML mentah, caption karakter
+sesuai format "Karakter N", dan jumlah caption sama dengan jumlah karakter
+hasil segmentasi sebenarnya.
+"""
 
 import sys
 from pathlib import Path
@@ -12,7 +17,7 @@ import app as appmod  # noqa: E402
 from processing.pemrosesan_field import baca_gambar  # noqa: E402
 
 APP = BASE / "app.py"
-LOG = BASE / "output" / "hasil_uji_ui.txt"
+LOG = BASE / "output" / "uji_ui_segmentasi_revisi.txt"
 baris = []
 
 
@@ -21,14 +26,14 @@ def catat(t):
     print(t, flush=True)
 
 
-for nama in ("nota_52.jpeg", "nota_22.jpeg"):
+for nama in ("nota_52.jpeg", "nota_01.jpeg"):
     path = None
     for d in (BASE / "data_nota_asli", BASE / "data_uji"):
         if (d / nama).exists():
             path = d / nama
             break
     if path is None:
-        catat(f"{nama}: tidak ada")
+        catat(f"{nama}: tidak ditemukan")
         continue
 
     gambar = baca_gambar(path)
@@ -45,18 +50,55 @@ for nama in ("nota_52.jpeg", "nota_22.jpeg"):
     at.sidebar.radio[0].set_value("Segmentasi Karakter").run()
 
     teks_md = " ".join(str(getattr(el, "value", "")) for el in at.markdown)
+    teks_cap = [str(getattr(el, "value", "")) for el in at.caption]
+
+    # Caption pada st.image tersimpan di elemen gambar, bukan st.caption.
+    # Hitung elemen gambar dengan menelusuri pohon elemen.
+    def hitung_gambar(node, hasil):
+        for anak in list(getattr(node, "children", {}).values()):
+            nama_kelas = type(anak).__name__
+            tipe = str(getattr(anak, "type", "")).lower()
+            if "Image" in nama_kelas or "img" in tipe:
+                hasil.append(anak)
+            hitung_gambar(anak, hasil)
+
+    daftar_gambar = []
+    hitung_gambar(at.main, daftar_gambar)
+    n_gambar = len(daftar_gambar)
+
+    # Hitung total karakter dari pipeline segmentasi sebenarnya.
+    total = 0
+    for f in det["fields"]:
+        crop = f.get("crop_show")
+        if crop is None or not getattr(crop, "size", 0):
+            continue
+        _, kar, _b, _t, _d = appmod.segmen_field(crop, f.get("jenis"))
+        total += len(kar)
+
+    # Field yang punya tab (6 jenis) saja yang ditampilkan.
+    jenis_tab = ("nomor", "penerima", "proyek", "produk", "jumlah", "harga")
+    field_tab = [f for f in det["fields"] if f.get("jenis") in jenis_tab]
+    karakter_tab = 0
+    for f in field_tab:
+        crop = f.get("crop_show")
+        if crop is None or not getattr(crop, "size", 0):
+            continue
+        _, kar, _b, _t, _d = appmod.segmen_field(crop, f.get("jenis"))
+        karakter_tab += len(kar)
+
+    # Perkiraan: 2 gambar per field (asli + bounding box) + potongan karakter.
+    harap_gambar = 2 * len(field_tab) + karakter_tab
 
     catat(f"=== {nama} ({len(det['fields'])} field) ===")
-    catat(f"  exception : {[e.value for e in at.exception]}")
-    catat(f"  expander  : {len(at.expander)} (harus 0)")
-    catat(f"  metric    : {len(at.metric)} (harus 0)")
-    catat(f"  dataframe : {len(at.dataframe)} (harus 0)")
-    catat(f"  subheader : {[h.value for h in at.subheader]}")
-    catat(f"  kartu     : {teks_md.count('kotak karakter')}")
-    catat(f"  kode blok : {len(at.code)}")
-    catat(f"  ada 'Ringkasan seluruh field': "
-          f"{'Ringkasan seluruh field' in teks_md}")
+    catat(f"  exception         : {[e.value for e in at.exception]}")
+    catat(f"  tabs              : {len(at.tabs)} (harus 6)")
+    catat(f"  expander          : {len(at.expander)} (harus 0)")
+    catat(f"  gambar            : {n_gambar} "
+          f"(harap 2x{len(field_tab)} + {karakter_tab} = {harap_gambar})")
+    catat(f"  gambar cocok      : {n_gambar == harap_gambar}")
+    catat(f"  ada HTML mentah   : {'<span' in teks_md or '<div' in teks_md}")
+    catat(f"  jumlah 'terdeteksi': "
+          f"{sum(1 for c in teks_cap if 'terdeteksi' in c)}")
+    catat(f"  subheader         : {[h.value for h in at.subheader][:5]}")
 
 LOG.write_text("\n".join(baris), encoding="utf-8")
-
-

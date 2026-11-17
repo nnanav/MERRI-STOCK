@@ -203,7 +203,7 @@ def buang_tanda_kali(hasil):
     """
     if not hasil:
         return hasil
-    if str(hasil[-1].get("cnn", "")).strip() in {"x", "X", "*", "×"}:
+    if str(hasil[-1].get("cnn", "")).strip() in {"x", "X", "*", "Ã—"}:
         return hasil[:-1]
     return hasil
 
@@ -218,7 +218,7 @@ def rapikan_satuan(teks):
     if not teks:
         return teks
     import re
-    teks = re.sub(r"[\s.,]*[xX×\*]+\s*$", "", teks)
+    teks = re.sub(r"[\s.,]*[xXÃ—\*]+\s*$", "", teks)
     return teks.strip()
 
 
@@ -231,7 +231,7 @@ def _segmentasi_cache(ndim, tinggi, lebar, data_bytes):
     dynamic programming untuk SETIAP field pada SETIAP rerun Streamlit,
     sehingga memuat halaman terasa sangat lambat (puluhan detik sampai
     menit). Dengan cache, hasil yang sama dipakai ulang selama isi crop
-    tidak berubah — termasuk dipakai bersama oleh halaman Segmentasi dan
+    tidak berubah â€” termasuk dipakai bersama oleh halaman Segmentasi dan
     Pengenalan karena keduanya memakai crop yang sama.
     """
     from processing.segmentasi_karakter import segmentasi_utama
@@ -666,7 +666,7 @@ def halaman_upload():
 
     if st.session_state.get("deteksi") is not None:
         det = st.session_state["deteksi"]
-        kol[1].success(f"Nota berhasil diproses — {len(det['fields'])} field terdeteksi.")
+        kol[1].success(f"Nota berhasil diproses â€” {len(det['fields'])} field terdeteksi.")
         st.info("Lanjutkan ke halaman Preprocessing, Segmentasi, Pengenalan, lalu Evaluasi.")
 
 
@@ -722,9 +722,16 @@ LABEL_JENIS = {
 
 
 def halaman_segmentasi():
-    st.header("Segmentasi")
+    st.header("Segmentasi Karakter")
+    st.caption(
+        "Visualisasi hasil pemisahan karakter pada setiap field nota transaksi."
+    )
+
     if st.session_state.get("gambar_bgr") is None:
-        st.info("Unggah nota dan klik 'Proses Nota' di halaman Upload terlebih dahulu.")
+        st.info(
+            "Unggah nota dan klik 'Proses Nota' di halaman Upload terlebih "
+            "dahulu."
+        )
         return
 
     det = ambil_deteksi()
@@ -732,135 +739,110 @@ def halaman_segmentasi():
         st.info("Klik 'Proses Nota' di halaman Upload terlebih dahulu.")
         return
 
-    nomor = det.get("nomor", {})
-    st.subheader("Deteksi nomor nota (mask merah)")
-    st.caption(
-        "Mask merah dipakai mengisolasi digit nomor nota; huruf 'NO' dan "
-        "titik dua dibuang sehingga hanya digit yang tersisa."
-    )
-    st.caption(
-        f"Status: {nomor.get('status', '-')} — {nomor.get('pesan', '')}"
-    )
-    if nomor.get("mask") is not None:
-        k1, k2, k3 = st.columns(3)
-        k1.image(nomor["mask"], caption="Mask merah (wilayah nomor)",
-                 width="stretch")
-        k2.image(gambar_rgb(cv2.bitwise_and(det["kecil"], det["kecil"],
-                                            mask=nomor["mask"])),
-                 caption="Piksel merah saja", width="stretch")
-        if nomor.get("crop_digit") is not None:
-            k3.image(gambar_rgb(nomor["crop_digit"]),
-                     caption="Crop digit nomor", width="stretch")
-        else:
-            k3.caption("Crop digit nomor tidak tersedia.")
-
-    st.subheader("Bounding box tiap field")
-    st.caption("Setiap kotak menandai lokasi satu field pada nota.")
-    # Tampilkan kotak di atas gambar HASIL PREPROCESSING (crop rapat yang
-    # sudah ditingkatkan), bukan kanvas penuh berlatar. Koordinat kotak
-    # (ruang pemrosesan lebar 1400) dipetakan ke ruang gambar tampil.
-    pp_det = det.get("preproses", {})
-    tampil_det = pp_det.get("tampil")
-    # Butuh "bbox_kertas" (dict preprocessing versi baru) agar pemetaan
-    # koordinat pasti benar; sesi lama tanpa kunci ini memakai fallback.
-    if ("bbox_kertas" in pp_det and tampil_det is not None
-            and pp_det.get("hasil") is not None):
-        lebar_kanvas = pp_det["hasil"].shape[1]
-        skala_map = 1400.0 / float(lebar_kanvas)
-        bbox_k = pp_det.get("bbox_kertas")
-        trim_t = pp_det.get("trim_tampil") or (0, 0, 0, 0)
-        if bbox_k is None:
-            ox = oy = 0.0
-        else:
-            ox = float(bbox_k[0]) + float(trim_t[0])
-            oy = float(bbox_k[1]) + float(trim_t[1])
-        vis_field = gambar_kotak_field(
-            tampil_det, det["fields"], skala=skala_map, ox=ox, oy=oy
-        )
-    else:
-        vis_field = gambar_kotak_field(det["kecil"], det["fields"])
-    st.image(gambar_rgb(vis_field), use_container_width=True)
-
-    st.subheader("Segmentasi per karakter")
-    st.caption(
-        "Satu bounding box untuk satu karakter. Kotak berasal dari pipeline "
-        "pengenalan sebenarnya (CNN + Template Matching)."
-    )
-
-    # Hitung segmentasi seluruh field lebih dulu, lalu tampilkan sebagai
-    # kartu per field. Hasil segmentasi sudah di-cache sehingga langkah ini
-    # tidak memperlambat halaman.
-    data_field = []
+    # Segmentasi seluruh field dihitung sekali di awal. Hasilnya sudah
+    # di-cache, sehingga memakai tabs tidak menambah waktu proses.
+    data = {}
     for f in det["fields"]:
         crop = f.get("crop_show")
-        if crop is None or getattr(crop, "size", 0) == 0:
-            data_field.append({
-                "field": f, "crop": None, "vis": None,
-                "karakter": [], "teks": "", "ada": False,
-            })
+        if crop is None or not getattr(crop, "size", 0):
+            data[f["id"]] = None
             continue
         vis, karakter, _biner, teks, _detail = segmen_field(
             crop, f.get("jenis")
         )
-        data_field.append({
-            "field": f, "crop": crop, "vis": vis,
-            "karakter": karakter, "teks": teks, "ada": True,
-        })
+        data[f["id"]] = {
+            "crop": crop,
+            "vis": vis,
+            "karakter": karakter,
+            "teks": teks,
+        }
 
-    # Tampilkan sebagai kartu, dikelompokkan per jenis field, dua kolom.
-    urutan_jenis = ["nomor", "penerima", "proyek", "produk", "jumlah",
-                    "satuan", "harga"]
-    for jenis in urutan_jenis:
-        kelompok = [d for d in data_field if d["field"].get("jenis") == jenis]
-        if not kelompok:
-            continue
+    per_jenis = {}
+    for f in det["fields"]:
+        per_jenis.setdefault(f.get("jenis"), []).append(f)
 
-        st.markdown(f"##### {LABEL_JENIS.get(jenis, jenis)}")
-        for mulai in range(0, len(kelompok), 2):
-            kolom = st.columns(2)
-            for kol, d in zip(kolom, kelompok[mulai:mulai + 2]):
-                with kol:
-                    _kartu_field(d)
+    tab_field = [
+        ("nomor", "Nomor Nota"),
+        ("penerima", "Nama Penerima"),
+        ("proyek", "Proyek"),
+        ("produk", "Nama Produk"),
+        ("jumlah", "Jumlah"),
+        ("harga", "Harga Satuan"),
+    ]
+
+    tabs = st.tabs([judul for _, judul in tab_field])
+
+    for tab, (jenis, label) in zip(tabs, tab_field):
+        with tab:
+            daftar = per_jenis.get(jenis, [])
+            if not daftar:
+                st.caption(
+                    f"Field {label} tidak terdeteksi pada nota ini."
+                )
+                continue
+
+            for urutan, f in enumerate(daftar, 1):
+                if urutan > 1:
+                    st.divider()
+                _tampilkan_field_segmen(
+                    f, data.get(f["id"]), label, len(daftar), urutan
+                )
 
 
-def _kartu_field(d):
-    """Satu kartu detail segmentasi untuk satu field."""
-    f = d["field"]
-    with st.container(border=True):
-        if not d["ada"]:
-            st.markdown(f"**{f['label']}**")
-            st.warning("Crop field ini tidak tersedia.")
-            return
+def _tampilkan_field_segmen(f, d, label, jumlah_field, urutan):
+    """Tampilkan satu field: informasi, citra, dan potongan tiap karakter."""
+    # Bila satu jenis field muncul beberapa kali (mis. beberapa baris
+    # produk), beri nomor agar tidak tertukar.
+    st.subheader(f"{label} {urutan}" if jumlah_field > 1 else label)
 
-        n_kotak = len(d["karakter"])
-        st.markdown(
-            f"**{f['label']}**  \n"
-            f"<span style='color:#666;font-size:0.85em'>"
-            f"{n_kotak} kotak karakter</span>",
-            unsafe_allow_html=True,
+    if d is None:
+        st.caption("Crop field ini tidak tersedia.")
+        return
+
+    karakter = d["karakter"]
+    st.caption(f"{len(karakter)} karakter terdeteksi")
+
+    kiri, kanan = st.columns(2)
+    with kiri:
+        st.image(
+            gambar_rgb(d["crop"]),
+            caption="Citra asli field",
+            width="stretch",
         )
-
-        st.caption("Citra asli field")
-        st.image(gambar_rgb(d["crop"]), use_container_width=True)
-
+    with kanan:
         if d["vis"] is not None:
-            st.caption(f"Bounding box karakter ({n_kotak} kotak)")
-            st.image(gambar_rgb(d["vis"]), use_container_width=True)
-
-        if d["teks"]:
-            st.markdown("Hasil OCR")
-            st.code(d["teks"], language=None)
-        else:
-            st.caption("Hasil OCR: belum terbaca")
-
-        if d["karakter"]:
-            urutan = " ".join(
-                k.get("final") or k.get("cnn") or "?"
-                for k in d["karakter"]
+            st.image(
+                gambar_rgb(d["vis"]),
+                caption="Bounding box karakter",
+                width="stretch",
             )
-            st.caption("Urutan karakter")
-            st.code(urutan, language=None)
+        else:
+            st.caption("Bounding box tidak tersedia.")
 
+    st.markdown("**Hasil Pemisahan Karakter**")
+
+    if not karakter:
+        st.caption("Tidak ada karakter yang tersegmentasi.")
+        return
+
+    # Maksimal 6 potongan per baris. Jumlah kolom dibuat tetap agar lebar
+    # gambar antar baris konsisten.
+    per_baris = 6
+    for mulai in range(0, len(karakter), per_baris):
+        irisan = karakter[mulai:mulai + per_baris]
+        kolom = st.columns(per_baris)
+        for slot, k in enumerate(irisan):
+            with kolom[slot]:
+                potong = d["crop"][k["y1"]:k["y2"], k["x1"]:k["x2"]]
+                nomor_karakter = mulai + slot + 1
+                if getattr(potong, "size", 0):
+                    st.image(
+                        gambar_rgb(potong),
+                        caption=f"Karakter {nomor_karakter}",
+                        width="stretch",
+                    )
+                else:
+                    st.caption(f"Karakter {nomor_karakter}")
 
 
 def kenali_satu(crop, pakai_clahe, jenis=None):
@@ -917,7 +899,7 @@ def halaman_pengenalan():
         t = h.get("tanpa", {})
         row = {
             "Field": f["label"],
-            "Hasil OCR": t.get("teks", "") or "—",
+            "Hasil OCR": t.get("teks", "") or "â€”",
             "Jumlah karakter": t.get("n", 0),
         }
         baris.append(row)
@@ -930,7 +912,7 @@ def halaman_pengenalan():
         with st.expander(f["label"]):
             if f["crop_show"] is not None and getattr(f["crop_show"], "size", 0):
                 st.image(gambar_rgb(f["crop_show"]), width=300)
-            st.write("Hasil OCR:", t.get("teks", "") or "—")
+            st.write("Hasil OCR:", t.get("teks", "") or "â€”")
             st.caption(f"Jumlah karakter: {t.get('n', 0)}")
             if t.get("status", "").startswith("gagal"):
                 st.warning(t["status"])
@@ -1093,9 +1075,9 @@ def halaman_business_understanding():
     st.markdown(
         """
         ```
-        Upload Nota  →  Image Preprocessing  →  Deteksi Field
-              →  Segmentasi Karakter  →  Pengenalan CNN + Template Matching
-              →  Evaluasi CER
+        Upload Nota  â†’  Image Preprocessing  â†’  Deteksi Field
+              â†’  Segmentasi Karakter  â†’  Pengenalan CNN + Template Matching
+              â†’  Evaluasi CER
         ```
         """
     )
@@ -1140,7 +1122,7 @@ def halaman_business_understanding():
                     "berdasarkan pola bentuk yang telah dilatih."),
         ]
         for nama, ket in metode:
-            st.markdown(f"**{nama}** — {ket}")
+            st.markdown(f"**{nama}** â€” {ket}")
 
     # 4. Informasi Data Latih
     st.subheader("4. Informasi Data Latih")
