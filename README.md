@@ -22,12 +22,13 @@ Buka browser pada alamat yang ditampilkan (biasanya http://localhost:8501).
 3. **Preprocessing** - crop kertas nota, peningkatan kualitas, dan binerisasi
 4. **Segmentasi** - bounding box per field dan pemisahan per karakter
 5. **Pengenalan** - hasil OCR semua field
-6. **Evaluasi** - CER per field utuh terhadap ground truth (status exact match)
+6. **Evaluasi** - tabel per field (Field, Ground Truth, Hasil OCR, Status)
 
 ## Struktur Folder
 
 ```
 app.py                  Dashboard Streamlit (6 halaman)
+PROMPT_AI.md            Prompt siap pakai untuk meminta AI menjelaskan program
 requirements.txt        Daftar dependensi
 processing/             Modul inti pengolahan citra dan OCR
 models/                 Model CNN dan daftar label
@@ -59,7 +60,15 @@ archive/                Backup kode dan model versi sebelumnya
 | Deteksi baris | Adaptive threshold, morfologi, connected components |
 | Segmentasi karakter | Projection profile + Dynamic Programming |
 | Pengenalan karaker | CNN (prediksi utama) + Template Matching (pencocok pola) |
-| Evaluasi | Character Error Rate (CER) |
+| Evaluasi | Status Benar/Salah per field (exact match); CER tersedia lewat skrip uji |
+
+## Prompt AI untuk Menjelaskan Program
+
+`PROMPT_AI.md` berisi prompt siap pakai (untuk ChatGPT/Claude/Gemini) yang
+menjelaskan sistem ini secara lengkap: identitas, alur 5 tahap, metode tiap
+tahap beserta parameter, dataset, arsitektur CNN, cara evaluasi, hasil
+pengukuran, dan keterbatasan yang diketahui. Salin isi antara penanda
+`=== MULAI PROMPT ===` dan `=== AKHIR PROMPT ===`, lalu tempel ke AI.
 
 ## Pelatihan Ulang CNN
 
