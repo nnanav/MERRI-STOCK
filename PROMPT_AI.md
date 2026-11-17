@@ -40,7 +40,26 @@ angka, nama file, nama fungsi, atau urutan tahap.
   Pengenalan Karakter, Hasil Ekstraksi, Evaluasi.
 - **Masukan:** satu berkas gambar nota (JPG/PNG).
 - **Keluaran:** teks per field, yaitu **nomor nota, nama penerima, proyek,
-  nama produk, jumlah, satuan, dan harga satuan**.
+  nama produk, jumlah, dan harga satuan**. Satuan juga dipisahkan saat
+  deteksi (untuk memisahkan jumlah dari satuannya), tetapi **tidak
+  ditampilkan** di aplikasi karena bukan bagian data transaksi yang disimpan.
+
+### Fungsi tiap halaman (caption pada aplikasi)
+
+1. **Business Understanding** — gambaran masalah, tujuan, alur sistem, dan
+   data latih yang dipakai.
+2. **Upload Nota** — unggah satu gambar nota (JPG/PNG), lalu klik Proses Nota
+   untuk mendeteksi field.
+3. **Preprocessing** — crop kertas nota, koreksi perspektif, lalu peningkatan
+   kualitas gambar sebelum pengenalan.
+4. **Segmentasi Karakter** — pemisahan teks tiap field menjadi karakter
+   beserta kotak batasnya.
+5. **Pengenalan Karakter** — hasil pengenalan tiap karakter menjadi teks per
+   field (Template Matching + CNN).
+6. **Hasil Ekstraksi** — periksa dan koreksi informasi transaksi sebelum
+   disimpan.
+7. **Evaluasi** — perbandingan hasil OCR dengan Ground Truth nota asli per
+   field; status Benar bila seluruh isi field sama persis.
 
 ### Teknologi
 

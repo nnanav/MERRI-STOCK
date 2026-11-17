@@ -51,6 +51,10 @@ database/               Basis data SQLite transaksi (dibuat saat Simpan Data)
 | `deteksi_baris.py` | Mendeteksi baris teks pada nota |
 | `deteksi_field.py` | Menemukan field: nomor, penerima, proyek, produk, jumlah, satuan, harga |
 | `pemrosesan_field.py` | Isolasi nomor nota, pembersihan minus, pemisahan jumlah/satuan |
+
+Catatan: field **satuan** tetap dideteksi karena dipakai untuk memisahkan
+jumlah dari satuannya, tetapi tidak ditampilkan di halaman Segmentasi,
+Pengenalan, maupun Evaluasi karena bukan bagian data transaksi yang disimpan.
 | `segmentasi_karakter.py` | Projection profile + Dynamic Programming + CNN |
 | `pengenalan_karakter.py` | Memuat CNN dan Template Matching, penggabungan keputusan |
 | `lokalisasi_template.py` | Pencocokan pola karakter dengan template (eksperimen) |
@@ -127,8 +131,8 @@ python tests/ukur_cer.py              # evaluasi CER per field vs ground truth
 python tests/ukur_segmen_gt.py        # jumlah kotak vs jumlah karakter GT
 python tests/uji_upload.py            # cek jalur upload (decode gambar + OCR)
 python tests/uji_halaman_tidak_blank.py  # pastikan tiap halaman ada isinya
-python tests/uji_ui_segmentasi.py     # cek UI Segmentasi (7 tab field)
-python tests/uji_ui_pengenalan.py     # cek UI Pengenalan Karakter (7 tab field)
+python tests/uji_ui_segmentasi.py     # cek UI Segmentasi (6 tab field)
+python tests/uji_ui_pengenalan.py     # cek UI Pengenalan Karakter (6 tab field)
 python tests/uji_ui_evaluasi.py       # cek UI Evaluasi (tanpa CER)
 python tests/uji_hasil_ekstraksi.py   # cek koreksi, validasi, simpan SQLite, CSV
 python tests/ukur_kecepatan.py        # ukur waktu muat halaman

@@ -28,7 +28,12 @@ def main():
     ):
         at, status = jalankan(halaman)
         galat = [e.value for e in at.exception]
+        # Setiap halaman harus punya satu caption singkat berisi fungsinya
+        # (bahan contekan saat demo).
+        caption = [str(c.value) for c in at.caption]
+        ringkas = caption[0] if caption else ""
         print(f"[{halaman}] status={status} exception={galat}")
+        print(f"  caption: {ringkas[:90]}")
         if galat:
             print("  detail:", galat[0][:400])
 

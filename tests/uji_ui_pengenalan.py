@@ -1,8 +1,8 @@
 """Uji UI halaman Pengenalan Karakter setelah dirapikan.
 
-Memeriksa: judul sesuai menu, 7 tabs (satu per jenis field), tanpa
-expander, tanpa HTML mentah/mojibake, satu subjudul per field, dan teks
-OCR setiap field muncul pada halaman.
+Memeriksa: judul sesuai menu, 6 tabs (satu per jenis field, tanpa Satuan),
+tanpa expander, tanpa HTML mentah/mojibake, satu subjudul per field, dan
+teks OCR setiap field muncul pada halaman.
 """
 
 import sys
@@ -61,12 +61,16 @@ for nama in ("nota_52.jpeg", "nota_01.jpeg"):
     )
     rusak = "\u00e2\u20ac\u201d" in teks_semua or "\u00c3\u2014" in teks_semua
 
-    # Setiap field harus muncul sebagai satu subjudul.
-    harap_subjudul = len(det["fields"])
+    # Setiap field yang punya tab harus muncul sebagai satu subjudul.
+    # Field "satuan" tidak ditampilkan pada halaman ini.
+    field_tampil = [
+        f for f in det["fields"] if f.get("jenis") in appmod.JENIS_TAMPIL
+    ]
+    harap_subjudul = len(field_tampil)
     # Setiap field dengan teks OCR harus menampilkan teks itu lewat st.code.
     teks_ocr = [
         (h.get("tanpa", {}).get("teks", "") or "").strip()
-        for h in (ocr.get(f["id"], {}) for f in det["fields"])
+        for h in (ocr.get(f["id"], {}) for f in field_tampil)
     ]
     harap_kode = sum(1 for t in teks_ocr if t)
     jumlah_caption_karakter = sum(
@@ -76,7 +80,7 @@ for nama in ("nota_52.jpeg", "nota_01.jpeg"):
     catat(f"=== {nama} ({len(det['fields'])} field) ===")
     catat(f"  exception          : {[e.value for e in at.exception]}")
     catat(f"  judul              : {judul}")
-    catat(f"  tabs               : {len(at.tabs)} (harus 7)")
+    catat(f"  tabs               : {len(at.tabs)} (harus 6)")
     catat(f"  expander           : {len(at.expander)} (harus 0)")
     catat(f"  subjudul           : {len(subjudul)} (harap {harap_subjudul})")
     catat(f"  teks OCR (st.code) : {len(kode)} (harap {harap_kode})")
@@ -87,7 +91,7 @@ for nama in ("nota_52.jpeg", "nota_01.jpeg"):
 
     assert not at.exception, [e.value for e in at.exception]
     assert judul and judul[0] == "Pengenalan Karakter", judul
-    assert len(at.tabs) == 7, f"tabs = {len(at.tabs)}"
+    assert len(at.tabs) == 6, f"tabs = {len(at.tabs)}"
     assert not at.expander, "halaman tidak boleh memakai expander"
     assert len(subjudul) == harap_subjudul, (len(subjudul), harap_subjudul)
     assert len(kode) == harap_kode, (len(kode), harap_kode)

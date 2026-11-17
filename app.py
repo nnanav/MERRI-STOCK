@@ -596,7 +596,10 @@ def _gambar_kotak(cimg, karakter):
 
 def halaman_upload():
     st.header("Upload Nota")
-    st.caption("Unggah satu gambar nota transaksi (jpg/png), lalu klik Proses Nota.")
+    st.caption(
+        "Unggah satu gambar nota (jpg/png), lalu klik Proses Nota untuk "
+        "mendeteksi field."
+    )
 
     berkas = st.file_uploader(
         "Unggah gambar nota", type=["png", "jpg", "jpeg"], key="unggah_nota"
@@ -682,6 +685,10 @@ def halaman_upload():
 
 def halaman_preprocessing():
     st.header("Preprocessing")
+    st.caption(
+        "Crop kertas nota, koreksi perspektif, lalu peningkatan kualitas "
+        "gambar sebelum pengenalan."
+    )
     gambar = st.session_state.get("gambar_bgr")
     if gambar is None:
         st.info("Unggah nota di halaman Upload terlebih dahulu.")
@@ -721,28 +728,32 @@ def halaman_preprocessing():
 
 # Nama tampilan dan urutan jenis field. Dipakai bersama oleh halaman
 # Segmentasi dan Pengenalan agar kedua halaman menampilkan field yang sama.
+# Field "satuan" sengaja tidak ditampilkan: isinya tidak dipakai pada data
+# transaksi (jumlah dan satuan sudah dipisah saat deteksi, dan yang disimpan
+# hanya jumlah), sehingga tab Satuan hanya menambah halaman tanpa manfaat.
 LABEL_JENIS = {
     "nomor": "Nomor Nota",
     "penerima": "Nama Penerima",
     "proyek": "Proyek",
     "produk": "Nama Produk",
     "jumlah": "Jumlah",
-    "satuan": "Satuan",
     "harga": "Harga Satuan",
 }
 
 URUTAN_JENIS = (
-    "nomor", "penerima", "proyek", "produk",
-    "jumlah", "satuan", "harga",
+    "nomor", "penerima", "proyek", "produk", "jumlah", "harga",
 )
 
 TAB_FIELD = [(jenis, LABEL_JENIS[jenis]) for jenis in URUTAN_JENIS]
+
+# Jenis field yang ditampilkan pada halaman Segmentasi dan Pengenalan.
+JENIS_TAMPIL = tuple(jenis for jenis, _ in TAB_FIELD)
 
 
 def halaman_segmentasi():
     st.header("Segmentasi Karakter")
     st.caption(
-        "Visualisasi hasil pemisahan karakter pada setiap field nota transaksi."
+        "Pemisahan teks tiap field menjadi karakter beserta kotak batasnya."
     )
 
     if st.session_state.get("gambar_bgr") is None:
@@ -759,8 +770,12 @@ def halaman_segmentasi():
 
     # Segmentasi seluruh field dihitung sekali di awal. Hasilnya sudah
     # di-cache, sehingga memakai tabs tidak menambah waktu proses.
+    # Field di luar JENIS_TAMPIL (mis. satuan) dilewati agar tidak dihitung
+    # percuma karena tidak ditampilkan di halaman ini.
     data = {}
     for f in det["fields"]:
+        if f.get("jenis") not in JENIS_TAMPIL:
+            continue
         crop = f.get("crop_show")
         if crop is None or not getattr(crop, "size", 0):
             data[f["id"]] = None
@@ -880,8 +895,8 @@ def jalankan_ocr_semua(det, sertakan_clahe):
 def halaman_pengenalan():
     st.header("Pengenalan Karakter")
     st.caption(
-        "Hasil pengenalan teks per field dari segmentasi karakter, Template "
-        "Matching, dan CNN."
+        "Hasil pengenalan tiap karakter menjadi teks per field "
+        "(Template Matching + CNN)."
     )
 
     if st.session_state.get("gambar_bgr") is None:
@@ -1063,9 +1078,8 @@ def halaman_hasil_ekstraksi():
     with kanan:
         st.caption(
             "Gambar di samping adalah hasil crop kertas nota setelah koreksi "
-            "perspektif dan peningkatan kualitas, bukan foto unggahan asli. "
-            "Pakai gambar ini sebagai acuan saat memeriksa isian."
-        )
+            "perspektif dan peningkatan kualitas, bukan foto unggahan asli. " )
+            
         st.caption(
             "Nilai awal setiap isian diambil dari hasil OCR halaman "
             "Pengenalan Karakter. Mengubah isian di sini tidak mengubah "
@@ -1322,6 +1336,9 @@ def info_dataset_latih():
 
 def halaman_business_understanding():
     st.header("Business Understanding")
+    st.caption(
+        "Gambaran masalah, tujuan, alur sistem, dan data latih yang dipakai."
+    )
 
     # 1. Latar Belakang
     st.subheader("1. Latar Belakang")
@@ -1474,8 +1491,8 @@ JENIS_DIEVALUASI = ("nomor", "penerima", "proyek", "produk", "jumlah", "harga")
 def halaman_evaluasi():
     st.header("Evaluasi Hasil Pengenalan OCR")
     st.caption(
-        "Setiap field dibandingkan secara utuh antara Ground Truth nota asli "
-        "dan hasil OCR. Status Benar bila seluruh isi field sama persis."
+        "Perbandingan hasil OCR dengan Ground Truth nota asli per field; "
+        "status Benar bila seluruh isi field sama persis."
     )
 
     if st.session_state.get("gambar_bgr") is None:

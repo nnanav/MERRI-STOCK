@@ -1,8 +1,8 @@
 """Uji UI halaman Segmentasi Karakter setelah revisi.
 
-Memeriksa: 7 tabs (satu per jenis field), tanpa expander, tanpa HTML
-mentah, caption karakter sesuai format "Karakter N", dan jumlah gambar
-sama dengan jumlah karakter hasil segmentasi sebenarnya.
+Memeriksa: 6 tabs (satu per jenis field, tanpa Satuan), tanpa expander,
+tanpa HTML mentah, caption karakter sesuai format "Karakter N", dan jumlah
+gambar sama dengan jumlah karakter hasil segmentasi sebenarnya.
 """
 
 import sys
@@ -66,18 +66,9 @@ for nama in ("nota_52.jpeg", "nota_01.jpeg"):
     hitung_gambar(at.main, daftar_gambar)
     n_gambar = len(daftar_gambar)
 
-    # Hitung total karakter dari pipeline segmentasi sebenarnya.
-    total = 0
-    for f in det["fields"]:
-        crop = f.get("crop_show")
-        if crop is None or not getattr(crop, "size", 0):
-            continue
-        _, kar, _b, _t, _d = appmod.segmen_field(crop, f.get("jenis"))
-        total += len(kar)
-
-    # Semua jenis field harus punya tab, termasuk satuan.
-    jenis_tab = ("nomor", "penerima", "proyek", "produk", "jumlah",
-                 "satuan", "harga")
+    # Hanya field yang punya tab yang ditampilkan. Field "satuan" tidak
+    # ditampilkan pada halaman ini.
+    jenis_tab = appmod.JENIS_TAMPIL
     field_tab = [f for f in det["fields"] if f.get("jenis") in jenis_tab]
     karakter_tab = 0
     for f in field_tab:
@@ -92,7 +83,7 @@ for nama in ("nota_52.jpeg", "nota_01.jpeg"):
 
     catat(f"=== {nama} ({len(det['fields'])} field) ===")
     catat(f"  exception         : {[e.value for e in at.exception]}")
-    catat(f"  tabs              : {len(at.tabs)} (harus 7)")
+    catat(f"  tabs              : {len(at.tabs)} (harus 6)")
     catat(f"  expander          : {len(at.expander)} (harus 0)")
     catat(f"  gambar            : {n_gambar} "
           f"(harap 2x{len(field_tab)} + {karakter_tab} = {harap_gambar})")
@@ -102,6 +93,11 @@ for nama in ("nota_52.jpeg", "nota_01.jpeg"):
           f"{sum(1 for c in teks_cap if 'terdeteksi' in c)}")
     catat(f"  subheader         : {[h.value for h in at.subheader][:5]}")
     catat(f"  semua field tampil: {len(field_tab) == len(det['fields'])}")
+    ada_satuan = any(
+        h.value == "Satuan" or h.value.startswith("Satuan ")
+        for h in at.subheader
+    )
+    catat(f"  ada subjudul Satuan: {ada_satuan}")
 
     teks_semua = " ".join(
         str(getattr(el, "value", ""))
@@ -111,12 +107,14 @@ for nama in ("nota_52.jpeg", "nota_01.jpeg"):
     rusak = "\u00e2\u20ac\u201d" in teks_semua or "\u00c3\u2014" in teks_semua
     catat(f"  ada mojibake      : {rusak}")
 
-    assert len(at.tabs) == 7, f"tabs = {len(at.tabs)}"
+    assert len(at.tabs) == 6, f"tabs = {len(at.tabs)}"
     assert not at.expander, "halaman tidak boleh memakai expander"
     assert n_gambar == harap_gambar, (n_gambar, harap_gambar)
-    assert len(field_tab) == len(det["fields"]), (
-        len(field_tab), len(det["fields"])
-    )
+    # Satuan tidak ditampilkan, jadi jumlah field tampil = field tanpa satuan.
+    harap_field = len([f for f in det["fields"]
+                       if f.get("jenis") != "satuan"])
+    assert len(field_tab) == harap_field, (len(field_tab), harap_field)
+    assert not ada_satuan, [h.value for h in at.subheader]
     assert not rusak, "teks halaman masih mengandung mojibake"
 
 LOG.write_text("\n".join(baris), encoding="utf-8")
