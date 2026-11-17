@@ -64,6 +64,22 @@ def cek_db(path):
     return n_transaksi, n_produk, produk
 
 
+def caption_gambar(at):
+    """Kumpulkan caption st.image (tersimpan pada proto, bukan st.caption)."""
+    hasil = []
+
+    def jalan(node):
+        for anak in list(getattr(node, "children", {}).values()):
+            proto = getattr(anak, "proto", None)
+            if type(proto).__name__ == "ImageList":
+                for img in proto.imgs:
+                    hasil.append(img.caption)
+            jalan(anak)
+
+    jalan(at.main)
+    return hasil
+
+
 def uji_angka():
     kasus = {
         "9.000": 9000.0,
@@ -229,6 +245,13 @@ def uji_halaman(nama):
         assert "Pratinjau Nota" in subjudul
         assert "Informasi Transaksi" in subjudul
         assert "Produk" in subjudul
+
+        # Pratinjau harus memakai hasil crop nota, bukan foto unggahan asli.
+        cap_gambar = caption_gambar(at)
+        assert len(cap_gambar) == 1, cap_gambar
+        assert cap_gambar[0].startswith("Hasil crop kertas nota"), cap_gambar
+        assert "Gambar nota asli" not in cap_gambar[0], cap_gambar
+        catat(f"  pratinjau   : {cap_gambar[0]}")
 
         # Tiga isian teks terisi nilai OCR apa adanya.
         for label, fid in (("Nomor Nota", "nomor"),

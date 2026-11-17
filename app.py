@@ -985,10 +985,36 @@ def _produk_dari_ocr(det, hasil):
 
 
 def _sel_teks(nilai):
-    """Ubah isi sel data editor menjadi teks; sel kosong jadi string kosong."""
+    """Ubah isi data editor menjadi teks; sel kosong jadi string kosong."""
     if nilai is None or pd.isna(nilai):
         return ""
     return str(nilai).strip()
+
+
+def _gambar_pratinjau(det, nama):
+    """
+    Ambil gambar nota untuk pratinjau halaman Hasil Ekstraksi.
+
+    Yang dipakai adalah hasil crop kertas nota (sudah dikoreksi perspektif
+    dan ditingkatkan kualitasnya) agar tulisan mudah dibaca, bukan foto
+    unggahan apa adanya. Bila hasil crop tidak tersedia, dipakai gambar
+    unggahan sebagai cadangan.
+
+    Mengembalikan (gambar, keterangan).
+    """
+    pp = st.session_state.get("preproses")
+    if not pp or pp.get("nama") != nama:
+        # Hasil preprocessing juga disimpan pada hasil deteksi, sehingga
+        # halaman ini tetap benar walau halaman Preprocessing belum dibuka.
+        pp = (det or {}).get("preproses")
+
+    if pp:
+        for kunci in ("tampil", "crop", "hasil"):
+            gambar = pp.get(kunci)
+            if gambar is not None and getattr(gambar, "size", 0):
+                return gambar, "Hasil crop kertas nota"
+
+    return st.session_state.get("gambar_bgr"), "Gambar nota asli"
 
 
 def halaman_hasil_ekstraksi():
@@ -1023,18 +1049,22 @@ def halaman_hasil_ekstraksi():
     )
 
     st.subheader("Pratinjau Nota")
-    kiri, kanan = st.columns([1, 2])
+    pratinjau, keterangan = _gambar_pratinjau(det, nama)
+
+    # gap="large" memberi jarak antara gambar dan keterangan agar teks
+    # tidak menempel pada tepi gambar.
+    kiri, kanan = st.columns([1, 2], gap="large")
     with kiri:
         st.image(
-            gambar_rgb(st.session_state["gambar_bgr"]),
-            caption=f"Nota: {nama}",
-            width=320,
+            gambar_rgb(pratinjau),
+            caption=f"{keterangan} — {nama}",
+            width="stretch",
         )
     with kanan:
         st.caption(
-            "Gunakan gambar nota di samping sebagai acuan saat memeriksa "
-            "Nomor Nota, Nama Penerima, Proyek, Nama Produk, Jumlah, dan "
-            "Harga Satuan."
+            "Gambar di samping adalah hasil crop kertas nota setelah koreksi "
+            "perspektif dan peningkatan kualitas, bukan foto unggahan asli. "
+            "Pakai gambar ini sebagai acuan saat memeriksa isian."
         )
         st.caption(
             "Nilai awal setiap isian diambil dari hasil OCR halaman "

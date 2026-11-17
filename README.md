@@ -103,6 +103,9 @@ Halaman **Hasil Ekstraksi** memakai hasil OCR dari halaman Pengenalan Karakter
 dikoreksi; hasil OCR asli tidak diubah dan halaman Evaluasi tetap memakai hasil
 OCR tersebut.
 
+- **Pratinjau.** Gambar nota yang ditampilkan adalah hasil crop kertas nota
+  (koreksi perspektif + peningkatan kualitas dari tahap Preprocessing), bukan
+  foto unggahan asli, agar tulisan mudah dibaca saat memeriksa isian.
 - **Validasi.** Nomor Nota, Nama Penerima, dan Proyek wajib diisi. Jumlah harus
   angka positif dan Harga Satuan tidak boleh negatif. Angka format Indonesia
   (`9.000`, `10.550`, `9.000,00`) dibaca sesuai nilainya, sedangkan angka rusak
