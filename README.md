@@ -38,7 +38,7 @@ data_uji/               Gambar nota uji tambahan
 scripts/                Skrip pelatihan dan validasi dataset
 tools/                  Alat bantu pelabelan template
 tests/                  Skrip pengujian
-archive/                Backup kode dan model versi sebelumnya
+output/                 Hasil pengujian dan gambar data latih (dibuat ulang)
 ```
 
 ### Modul pada `processing/`
@@ -115,8 +115,8 @@ python tests/diag_segmen.py           # rincian segmen per field
 - Model CNN menggunakan 70 kelas karakter (huruf besar, huruf kecil, angka, simbol).
 - Template Matching memakai seluruh gambar pada `dataset/huruf`, `dataset/angka`,
   dan `dataset/simbol`.
-- Folder `archive/` berisi backup kode dan model versi sebelumnya; tidak dipakai
-  saat aplikasi berjalan dan aman untuk diabaikan.
+- Folder `output/` berisi hasil pengujian dan gambar data latih; isinya dibuat
+  ulang saat program dijalankan sehingga aman dihapus.
 - **Memori.** TensorFlow + model CNN membutuhkan sekitar 0,5 GB RAM. Pada mesin
   ber-RAM kecil (mis. 4 GB), jalankan hanya SATU server Streamlit dan tutup
   aplikasi lain. Bila muncul pesan `Insufficient memory` dari OpenCV, artinya

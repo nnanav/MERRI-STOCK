@@ -28,5 +28,5 @@ cer_*.txt
 hasil_*.txt
 ~$*
 
-# Catatan: dataset/, models/, data_* dan archive/ TIDAK diabaikan
-# agar proyek tetap dapat direproduksi dan backup tersedia.
+# Catatan: dataset/, models/ dan data_* TIDAK diabaikan
+# agar proyek tetap dapat direproduksi.
