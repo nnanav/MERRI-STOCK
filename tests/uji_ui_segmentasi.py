@@ -1,8 +1,8 @@
 """Uji UI halaman Segmentasi Karakter setelah revisi.
 
-Memeriksa: 6 tabs, tanpa expander, tanpa HTML mentah, caption karakter
-sesuai format "Karakter N", dan jumlah caption sama dengan jumlah karakter
-hasil segmentasi sebenarnya.
+Memeriksa: 7 tabs (satu per jenis field), tanpa expander, tanpa HTML
+mentah, caption karakter sesuai format "Karakter N", dan jumlah gambar
+sama dengan jumlah karakter hasil segmentasi sebenarnya.
 """
 
 import sys
@@ -75,8 +75,9 @@ for nama in ("nota_52.jpeg", "nota_01.jpeg"):
         _, kar, _b, _t, _d = appmod.segmen_field(crop, f.get("jenis"))
         total += len(kar)
 
-    # Field yang punya tab (6 jenis) saja yang ditampilkan.
-    jenis_tab = ("nomor", "penerima", "proyek", "produk", "jumlah", "harga")
+    # Semua jenis field harus punya tab, termasuk satuan.
+    jenis_tab = ("nomor", "penerima", "proyek", "produk", "jumlah",
+                 "satuan", "harga")
     field_tab = [f for f in det["fields"] if f.get("jenis") in jenis_tab]
     karakter_tab = 0
     for f in field_tab:
@@ -91,7 +92,7 @@ for nama in ("nota_52.jpeg", "nota_01.jpeg"):
 
     catat(f"=== {nama} ({len(det['fields'])} field) ===")
     catat(f"  exception         : {[e.value for e in at.exception]}")
-    catat(f"  tabs              : {len(at.tabs)} (harus 6)")
+    catat(f"  tabs              : {len(at.tabs)} (harus 7)")
     catat(f"  expander          : {len(at.expander)} (harus 0)")
     catat(f"  gambar            : {n_gambar} "
           f"(harap 2x{len(field_tab)} + {karakter_tab} = {harap_gambar})")
@@ -100,5 +101,22 @@ for nama in ("nota_52.jpeg", "nota_01.jpeg"):
     catat(f"  jumlah 'terdeteksi': "
           f"{sum(1 for c in teks_cap if 'terdeteksi' in c)}")
     catat(f"  subheader         : {[h.value for h in at.subheader][:5]}")
+    catat(f"  semua field tampil: {len(field_tab) == len(det['fields'])}")
+
+    teks_semua = " ".join(
+        str(getattr(el, "value", ""))
+        for jenis_el in ("markdown", "caption", "subheader", "header", "code")
+        for el in getattr(at, jenis_el, [])
+    )
+    rusak = "\u00e2\u20ac\u201d" in teks_semua or "\u00c3\u2014" in teks_semua
+    catat(f"  ada mojibake      : {rusak}")
+
+    assert len(at.tabs) == 7, f"tabs = {len(at.tabs)}"
+    assert not at.expander, "halaman tidak boleh memakai expander"
+    assert n_gambar == harap_gambar, (n_gambar, harap_gambar)
+    assert len(field_tab) == len(det["fields"]), (
+        len(field_tab), len(det["fields"])
+    )
+    assert not rusak, "teks halaman masih mengandung mojibake"
 
 LOG.write_text("\n".join(baris), encoding="utf-8")

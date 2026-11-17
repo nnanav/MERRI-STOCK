@@ -270,7 +270,7 @@ def kandidat_potongan(blob, batas, tinggi_acuan):
     Kumpulkan semua potongan kandidat (i, j) beserta citra 32x32-nya.
 
     Dipisahkan dari penilaian agar potongan dari SEMUA komponen dalam satu
-    field dapat diprediksi dalam satu batch Ã¢â‚¬â€ jauh lebih cepat daripada
+    field dapat diprediksi dalam satu batch — jauh lebih cepat daripada
     memanggil model sekali per komponen.
     """
     min_w = max(2, int(0.10 * tinggi_acuan))
@@ -631,7 +631,7 @@ def _rapikan_gabung_pecah(hasil, biner, tinggi_acuan,
         #
         # Gabungan huruf sempit tidak bisa dideteksi dari lebar. Contoh
         # nyata: "In" pada "Indra" menyatu menjadi satu kotak selebar
-        # 0.47 x tinggi huruf ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â LEBIH SEMPIT dari median karakter,
+        # 0.47 x tinggi huruf — LEBIH SEMPIT dari median karakter,
         # sehingga tidak ada ambang lebar yang bisa menangkapnya.
         # Satu-satunya sinyal yang tersisa adalah keraguan model.
         ragu_kuat = pc < 0.60 and w > 0.40 * ta

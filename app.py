@@ -203,7 +203,7 @@ def buang_tanda_kali(hasil):
     """
     if not hasil:
         return hasil
-    if str(hasil[-1].get("cnn", "")).strip() in {"x", "X", "*", "Ã—"}:
+    if str(hasil[-1].get("cnn", "")).strip() in {"x", "X", "*", "×"}:
         return hasil[:-1]
     return hasil
 
@@ -218,7 +218,7 @@ def rapikan_satuan(teks):
     if not teks:
         return teks
     import re
-    teks = re.sub(r"[\s.,]*[xXÃ—\*]+\s*$", "", teks)
+    teks = re.sub(r"[\s.,]*[xX×\*]+\s*$", "", teks)
     return teks.strip()
 
 
@@ -231,7 +231,7 @@ def _segmentasi_cache(ndim, tinggi, lebar, data_bytes):
     dynamic programming untuk SETIAP field pada SETIAP rerun Streamlit,
     sehingga memuat halaman terasa sangat lambat (puluhan detik sampai
     menit). Dengan cache, hasil yang sama dipakai ulang selama isi crop
-    tidak berubah â€” termasuk dipakai bersama oleh halaman Segmentasi dan
+    tidak berubah — termasuk dipakai bersama oleh halaman Segmentasi dan
     Pengenalan karena keduanya memakai crop yang sama.
     """
     from processing.segmentasi_karakter import segmentasi_utama
@@ -666,7 +666,7 @@ def halaman_upload():
 
     if st.session_state.get("deteksi") is not None:
         det = st.session_state["deteksi"]
-        kol[1].success(f"Nota berhasil diproses â€” {len(det['fields'])} field terdeteksi.")
+        kol[1].success(f"Nota berhasil diproses — {len(det['fields'])} field terdeteksi.")
         st.info("Lanjutkan ke halaman Preprocessing, Segmentasi, Pengenalan, lalu Evaluasi.")
 
 
@@ -709,7 +709,8 @@ def halaman_preprocessing():
     c2.image(otsu, caption="Binarisasi Otsu", width="stretch")
 
 
-# Nama tampilan untuk setiap jenis field, dipakai halaman Segmentasi.
+# Nama tampilan dan urutan jenis field. Dipakai bersama oleh halaman
+# Segmentasi dan Pengenalan agar kedua halaman menampilkan field yang sama.
 LABEL_JENIS = {
     "nomor": "Nomor Nota",
     "penerima": "Nama Penerima",
@@ -719,6 +720,13 @@ LABEL_JENIS = {
     "satuan": "Satuan",
     "harga": "Harga Satuan",
 }
+
+URUTAN_JENIS = (
+    "nomor", "penerima", "proyek", "produk",
+    "jumlah", "satuan", "harga",
+)
+
+TAB_FIELD = [(jenis, LABEL_JENIS[jenis]) for jenis in URUTAN_JENIS]
 
 
 def halaman_segmentasi():
@@ -761,18 +769,9 @@ def halaman_segmentasi():
     for f in det["fields"]:
         per_jenis.setdefault(f.get("jenis"), []).append(f)
 
-    tab_field = [
-        ("nomor", "Nomor Nota"),
-        ("penerima", "Nama Penerima"),
-        ("proyek", "Proyek"),
-        ("produk", "Nama Produk"),
-        ("jumlah", "Jumlah"),
-        ("harga", "Harga Satuan"),
-    ]
+    tabs = st.tabs([judul for _, judul in TAB_FIELD])
 
-    tabs = st.tabs([judul for _, judul in tab_field])
-
-    for tab, (jenis, label) in zip(tabs, tab_field):
+    for tab, (jenis, label) in zip(tabs, TAB_FIELD):
         with tab:
             daftar = per_jenis.get(jenis, [])
             if not daftar:
@@ -869,7 +868,12 @@ def jalankan_ocr_semua(det, sertakan_clahe):
 
 
 def halaman_pengenalan():
-    st.header("Pengenalan")
+    st.header("Pengenalan Karakter")
+    st.caption(
+        "Hasil pengenalan teks per field dari segmentasi karakter, Template "
+        "Matching, dan CNN."
+    )
+
     if st.session_state.get("gambar_bgr") is None:
         st.info("Unggah nota di halaman Upload terlebih dahulu.")
         return
@@ -887,35 +891,60 @@ def halaman_pengenalan():
 
     hasil = st.session_state["ocr_semua"]
 
-    st.subheader("Hasil pengenalan semua field")
     st.caption(
         "Segmentasi menemukan kandidat karakter, Template Matching mencocokkan "
-        "polanya, dan CNN mengenali tiap karakter. Hasil di bawah adalah satu "
-        "teks OCR per field."
+        "polanya, dan CNN mengenali tiap karakter. Pilih tab field untuk "
+        "melihat teks hasil OCR."
     )
-    baris = []
-    for f in det["fields"]:
-        h = hasil.get(f["id"], {})
-        t = h.get("tanpa", {})
-        row = {
-            "Field": f["label"],
-            "Hasil OCR": t.get("teks", "") or "â€”",
-            "Jumlah karakter": t.get("n", 0),
-        }
-        baris.append(row)
-    st.dataframe(baris, use_container_width=True, hide_index=True)
 
-    st.subheader("Detail hasil per field")
+    per_jenis = {}
     for f in det["fields"]:
-        h = hasil.get(f["id"], {})
-        t = h.get("tanpa", {})
-        with st.expander(f["label"]):
-            if f["crop_show"] is not None and getattr(f["crop_show"], "size", 0):
-                st.image(gambar_rgb(f["crop_show"]), width=300)
-            st.write("Hasil OCR:", t.get("teks", "") or "â€”")
-            st.caption(f"Jumlah karakter: {t.get('n', 0)}")
-            if t.get("status", "").startswith("gagal"):
-                st.warning(t["status"])
+        per_jenis.setdefault(f.get("jenis"), []).append(f)
+
+    tabs = st.tabs([judul for _, judul in TAB_FIELD])
+
+    for tab, (jenis, label) in zip(tabs, TAB_FIELD):
+        with tab:
+            daftar = per_jenis.get(jenis, [])
+            if not daftar:
+                st.caption(f"Field {label} tidak terdeteksi pada nota ini.")
+                continue
+
+            for urutan, f in enumerate(daftar, 1):
+                if urutan > 1:
+                    st.divider()
+                t = hasil.get(f["id"], {}).get("tanpa", {})
+                _tampilkan_field_kenal(f, t, label, len(daftar), urutan)
+
+
+def _tampilkan_field_kenal(f, t, label, jumlah_field, urutan):
+    """Tampilkan satu field: crop, teks hasil OCR, dan jumlah karakter."""
+    # Bila satu jenis field muncul beberapa kali (mis. beberapa baris
+    # produk), beri nomor agar tidak tertukar.
+    st.subheader(f"{label} {urutan}" if jumlah_field > 1 else label)
+
+    kiri, kanan = st.columns([1, 2])
+    with kiri:
+        crop = f.get("crop_show")
+        if crop is not None and getattr(crop, "size", 0):
+            st.image(
+                gambar_rgb(crop),
+                caption="Citra field",
+                width="stretch",
+            )
+        else:
+            st.caption("Crop field tidak tersedia.")
+
+    with kanan:
+        st.markdown("**Hasil OCR**")
+        teks = t.get("teks", "") or ""
+        if teks:
+            st.code(teks, language=None)
+        else:
+            st.caption("Belum terbaca.")
+        st.caption(f"Jumlah karakter: {t.get('n', 0)}")
+        if t.get("status", "").startswith("gagal"):
+            st.warning(t["status"])
 
 
 RASIO_VALIDASI = 0.20  # mengikuti konstanta VALIDASI di scripts/latih_cnn.py
@@ -1075,9 +1104,9 @@ def halaman_business_understanding():
     st.markdown(
         """
         ```
-        Upload Nota  â†’  Image Preprocessing  â†’  Deteksi Field
-              â†’  Segmentasi Karakter  â†’  Pengenalan CNN + Template Matching
-              â†’  Evaluasi CER
+        Upload Nota  →  Image Preprocessing  →  Deteksi Field
+              →  Segmentasi Karakter  →  Pengenalan CNN + Template Matching
+              →  Evaluasi CER
         ```
         """
     )
@@ -1122,7 +1151,7 @@ def halaman_business_understanding():
                     "berdasarkan pola bentuk yang telah dilatih."),
         ]
         for nama, ket in metode:
-            st.markdown(f"**{nama}** â€” {ket}")
+            st.markdown(f"**{nama}** — {ket}")
 
     # 4. Informasi Data Latih
     st.subheader("4. Informasi Data Latih")

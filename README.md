@@ -103,6 +103,9 @@ python tests/ukur_cer.py              # evaluasi CER per field vs ground truth
 python tests/ukur_segmen_gt.py        # jumlah kotak vs jumlah karakter GT
 python tests/uji_upload.py            # cek jalur upload (decode gambar + OCR)
 python tests/uji_halaman_tidak_blank.py  # pastikan tiap halaman ada isinya
+python tests/uji_ui_segmentasi.py     # cek UI Segmentasi (7 tab field)
+python tests/uji_ui_pengenalan.py     # cek UI Pengenalan Karakter (7 tab field)
+python tests/uji_ui_evaluasi.py       # cek UI Evaluasi (tanpa CER)
 python tests/ukur_kecepatan.py        # ukur waktu muat halaman
 python tests/audit_segmentasi.py      # cek karakter tergabung/terpotong (16 nota)
 python tests/audit_generalisasi.py    # cek kewajaran hasil pada nota baru
