@@ -22,7 +22,7 @@ print(f"kunci det: {sorted(det.keys())}")
 
 gagal = 0
 for halaman in ("Preprocessing", "Segmentasi Karakter", "Pengenalan Karakter",
-                "Evaluasi"):
+                "Hasil Ekstraksi", "Evaluasi"):
     at = AppTest.from_file(str(APP), default_timeout=300)
     at.run()
     at.session_state["gambar_bgr"] = gambar

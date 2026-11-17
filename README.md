@@ -22,12 +22,13 @@ Buka browser pada alamat yang ditampilkan (biasanya http://localhost:8501).
 3. **Preprocessing** - crop kertas nota, peningkatan kualitas, dan binerisasi
 4. **Segmentasi** - bounding box per field dan pemisahan per karakter
 5. **Pengenalan** - hasil OCR semua field
-6. **Evaluasi** - tabel per field (Field, Ground Truth, Hasil OCR, Status)
+6. **Hasil Ekstraksi** - periksa dan koreksi hasil OCR, lalu simpan/unduh
+7. **Evaluasi** - tabel per field (Field, Ground Truth, Hasil OCR, Status)
 
 ## Struktur Folder
 
 ```
-app.py                  Dashboard Streamlit (6 halaman)
+app.py                  Dashboard Streamlit (7 halaman)
 PROMPT_AI.md            Prompt siap pakai untuk meminta AI menjelaskan program
 requirements.txt        Daftar dependensi
 processing/             Modul inti pengolahan citra dan OCR
@@ -39,6 +40,7 @@ scripts/                Skrip pelatihan dan validasi dataset
 tools/                  Alat bantu pelabelan template
 tests/                  Skrip pengujian
 output/                 Hasil pengujian dan gambar data latih (dibuat ulang)
+database/               Basis data SQLite transaksi (dibuat saat Simpan Data)
 ```
 
 ### Modul pada `processing/`
@@ -52,6 +54,7 @@ output/                 Hasil pengujian dan gambar data latih (dibuat ulang)
 | `segmentasi_karakter.py` | Projection profile + Dynamic Programming + CNN |
 | `pengenalan_karakter.py` | Memuat CNN dan Template Matching, penggabungan keputusan |
 | `lokalisasi_template.py` | Pencocokan pola karakter dengan template (eksperimen) |
+| `data_transaksi.py` | Validasi angka nota, simpan SQLite, dan unduh CSV |
 
 ## Metode
 
@@ -93,10 +96,28 @@ Hasil disimpan ke `output/data_latih_karakter.png` (atau `output/data_latih_inpu
 Setiap kotak berisi satu contoh asli hasil normalisasi 32x32, dengan nomor kelas
 dan kode (`A.U` huruf besar, `a.L` huruf kecil, `, S` simbol).
 
+## Hasil Ekstraksi dan Penyimpanan
+
+Halaman **Hasil Ekstraksi** memakai hasil OCR dari halaman Pengenalan Karakter
+(tidak menjalankan OCR ulang). Nilai OCR ditampilkan sebagai isian yang dapat
+dikoreksi; hasil OCR asli tidak diubah dan halaman Evaluasi tetap memakai hasil
+OCR tersebut.
+
+- **Validasi.** Nomor Nota, Nama Penerima, dan Proyek wajib diisi. Jumlah harus
+  angka positif dan Harga Satuan tidak boleh negatif. Angka format Indonesia
+  (`9.000`, `10.550`, `9.000,00`) dibaca sesuai nilainya, sedangkan angka rusak
+  seperti `9.000P00` atau `200a000` ditolak dan harus diperbaiki dulu.
+- **Simpan.** Data disimpan ke `database/transaksi.db` (SQLite) dalam dua tabel:
+  `transaksi` (informasi utama nota) dan `transaksi_produk` (satu baris per
+  produk). Sidik isi data mencegah penyimpanan ganda akibat klik berulang.
+- **Unduh.** Tombol **Unduh Hasil** menghasilkan CSV dengan satu baris per
+  produk. Tombol aktif setelah data tersimpan, sehingga yang diunduh hanya data
+  yang sudah dikoreksi dan dikonfirmasi.
+
 ## Pengujian
 
 ```powershell
-python tests/uji_app_streamlit.py     # cek 6 halaman dashboard
+python tests/uji_app_streamlit.py     # cek 7 halaman dashboard
 python tests/uji_info_dataset.py      # cek konsistensi angka data latih
 python tests/uji_integrasi_segmen.py  # cek alur upload sampai evaluasi
 python tests/ukur_cer.py              # evaluasi CER per field vs ground truth
@@ -106,6 +127,7 @@ python tests/uji_halaman_tidak_blank.py  # pastikan tiap halaman ada isinya
 python tests/uji_ui_segmentasi.py     # cek UI Segmentasi (7 tab field)
 python tests/uji_ui_pengenalan.py     # cek UI Pengenalan Karakter (7 tab field)
 python tests/uji_ui_evaluasi.py       # cek UI Evaluasi (tanpa CER)
+python tests/uji_hasil_ekstraksi.py   # cek koreksi, validasi, simpan SQLite, CSV
 python tests/ukur_kecepatan.py        # ukur waktu muat halaman
 python tests/audit_segmentasi.py      # cek karakter tergabung/terpotong (16 nota)
 python tests/audit_generalisasi.py    # cek kewajaran hasil pada nota baru
@@ -120,6 +142,9 @@ python tests/diag_segmen.py           # rincian segmen per field
   dan `dataset/simbol`.
 - Folder `output/` berisi hasil pengujian dan gambar data latih; isinya dibuat
   ulang saat program dijalankan sehingga aman dihapus.
+- `database/transaksi.db` berisi data transaksi yang sudah dikonfirmasi pengguna.
+  Berkas ini **bukan** hasil sementara: jangan dihapus saat membersihkan
+  `output/`. Folder `database/` diabaikan Git agar data nota tidak ikut terunggah.
 - **Memori.** TensorFlow + model CNN membutuhkan sekitar 0,5 GB RAM. Pada mesin
   ber-RAM kecil (mis. 4 GB), jalankan hanya SATU server Streamlit dan tutup
   aplikasi lain. Bila muncul pesan `Insufficient memory` dari OpenCV, artinya

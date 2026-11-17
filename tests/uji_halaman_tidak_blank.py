@@ -16,6 +16,7 @@ HALAMAN = [
     "Preprocessing",
     "Segmentasi Karakter",
     "Pengenalan Karakter",
+    "Hasil Ekstraksi",
     "Evaluasi",
 ]
 

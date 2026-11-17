@@ -4,6 +4,7 @@ import gc
 
 import cv2
 import numpy as np
+import pandas as pd
 import streamlit as st
 
 from processing.deteksi_baris import deteksi_baris
@@ -11,6 +12,9 @@ from processing.deteksi_field import (
     deteksi_produk, deteksi_field_lain,
     deteksi_penerima_proyek, deteksi_harga_satuan,
     pangkas_awalan_tipis, pangkas_hingga_rp,
+)
+from processing.data_transaksi import (
+    buat_csv, simpan_transaksi, validasi_transaksi,
 )
 from processing.pemrosesan_field import (
     isolasi_nomor, bersihkan_minus, pisah_jumlah_satuan,
@@ -610,6 +614,9 @@ def halaman_upload():
             st.session_state["ocr_kunci"] = None
             st.session_state["preproses"] = None
             st.session_state["gambar_bgr"] = None
+            # Form Hasil Ekstraksi ikut direset: kunci widgetnya memakai
+            # nama berkas, dan data terkonfirmasi nota lama dibuang.
+            st.session_state["ekstraksi_tersimpan"] = None
             gc.collect()
 
         gambar_baru = None
@@ -667,7 +674,10 @@ def halaman_upload():
     if st.session_state.get("deteksi") is not None:
         det = st.session_state["deteksi"]
         kol[1].success(f"Nota berhasil diproses — {len(det['fields'])} field terdeteksi.")
-        st.info("Lanjutkan ke halaman Preprocessing, Segmentasi, Pengenalan, lalu Evaluasi.")
+        st.info(
+            "Lanjutkan ke halaman Preprocessing, Segmentasi Karakter, "
+            "Pengenalan Karakter, Hasil Ekstraksi, lalu Evaluasi."
+        )
 
 
 def halaman_preprocessing():
@@ -947,6 +957,226 @@ def _tampilkan_field_kenal(f, t, label, jumlah_field, urutan):
             st.warning(t["status"])
 
 
+def _teks_ocr(hasil, field_id):
+    """Ambil teks hasil OCR satu field apa adanya (tidak diubah)."""
+    h = (hasil or {}).get(field_id) or {}
+    return str(((h.get("tanpa") or {}).get("teks") or "")).strip()
+
+
+def _produk_dari_ocr(det, hasil):
+    """
+    Susun baris produk awal untuk halaman Hasil Ekstraksi.
+
+    Satu baris mewakili satu produk, diambil dari field produk_i, jumlah_i,
+    dan harga_i pada hasil OCR. Nilai OCR hanya dipakai sebagai nilai awal;
+    pengguna boleh mengoreksinya tanpa mengubah hasil OCR asli.
+    """
+    baris = []
+    for f in det["fields"]:
+        if f.get("jenis") != "produk":
+            continue
+        urutan = str(f["id"]).split("_")[-1]
+        baris.append({
+            "Nama Produk": _teks_ocr(hasil, f"produk_{urutan}"),
+            "Jumlah": _teks_ocr(hasil, f"jumlah_{urutan}"),
+            "Harga Satuan": _teks_ocr(hasil, f"harga_{urutan}"),
+        })
+    return baris
+
+
+def _sel_teks(nilai):
+    """Ubah isi sel data editor menjadi teks; sel kosong jadi string kosong."""
+    if nilai is None or pd.isna(nilai):
+        return ""
+    return str(nilai).strip()
+
+
+def halaman_hasil_ekstraksi():
+    st.header("Hasil Pembacaan Nota")
+    st.caption("Periksa dan koreksi informasi transaksi sebelum disimpan.")
+
+    if st.session_state.get("gambar_bgr") is None:
+        st.info("Unggah nota di halaman Upload terlebih dahulu.")
+        return
+
+    det = ambil_deteksi()
+    if det is None:
+        st.info("Klik 'Proses Nota' di halaman Upload terlebih dahulu.")
+        return
+
+    hasil = st.session_state.get("ocr_semua")
+    if not hasil:
+        # Halaman ini tidak menjalankan OCR sendiri. Hasil OCR dihitung
+        # sekali di halaman Pengenalan Karakter lalu dipakai bersama.
+        st.info(
+            "Hasil OCR belum tersedia. Buka halaman Pengenalan Karakter "
+            "sekali agar hasil OCR dihitung, lalu kembali ke halaman ini."
+        )
+        return
+
+    nama = st.session_state.get("nama_file") or "nota"
+
+    # Status ini hanya menyatakan OCR selesai, bukan bahwa hasilnya benar.
+    st.success(
+        "Proses OCR selesai. Hasil di bawah belum tentu benar, jadi periksa "
+        "dan koreksi dulu sebelum disimpan."
+    )
+
+    st.subheader("Pratinjau Nota")
+    kiri, kanan = st.columns([1, 2])
+    with kiri:
+        st.image(
+            gambar_rgb(st.session_state["gambar_bgr"]),
+            caption=f"Nota: {nama}",
+            width=320,
+        )
+    with kanan:
+        st.caption(
+            "Gunakan gambar nota di samping sebagai acuan saat memeriksa "
+            "Nomor Nota, Nama Penerima, Proyek, Nama Produk, Jumlah, dan "
+            "Harga Satuan."
+        )
+        st.caption(
+            "Nilai awal setiap isian diambil dari hasil OCR halaman "
+            "Pengenalan Karakter. Mengubah isian di sini tidak mengubah "
+            "hasil OCR maupun halaman Evaluasi."
+        )
+
+    # Kunci widget memakai nama berkas, sehingga mengunggah nota baru
+    # otomatis menampilkan form berisi hasil OCR nota baru itu.
+    kunci = f"ekstraksi_{nama}"
+
+    st.subheader("Informasi Transaksi")
+    st.caption("Ubah isian yang tidak sesuai dengan nota, lalu simpan.")
+
+    nomor = st.text_input(
+        "Nomor Nota", value=_teks_ocr(hasil, "nomor"), key=f"{kunci}_nomor"
+    )
+    kol_a, kol_b = st.columns(2)
+    penerima = kol_a.text_input(
+        "Nama Penerima", value=_teks_ocr(hasil, "penerima"),
+        key=f"{kunci}_penerima",
+    )
+    proyek = kol_b.text_input(
+        "Proyek", value=_teks_ocr(hasil, "proyek"), key=f"{kunci}_proyek"
+    )
+
+    st.subheader("Produk")
+    st.caption(
+        "Satu baris untuk satu produk. Tambah atau hapus baris sesuai isi "
+        "nota. Jumlah harus angka positif, harga satuan tidak negatif."
+    )
+
+    awal = _produk_dari_ocr(det, hasil)
+    if not awal:
+        awal = [{"Nama Produk": "", "Jumlah": "", "Harga Satuan": ""}]
+
+    # Isi tabel disimpan di session_state agar hasil koreksi pengguna tidak
+    # hilang saat Streamlit rerun (mis. setelah tombol Simpan ditekan).
+    # Kuncinya memakai nama berkas, sehingga nota baru memakai tabel baru.
+    kunci_tabel = f"{kunci}_produk_data"
+    if kunci_tabel not in st.session_state:
+        st.session_state[kunci_tabel] = pd.DataFrame(
+            awal, columns=["Nama Produk", "Jumlah", "Harga Satuan"]
+        )
+
+    edit = st.data_editor(
+        st.session_state[kunci_tabel],
+        key=f"{kunci}_produk",
+        num_rows="dynamic",
+        hide_index=True,
+        width="stretch",
+        column_config={
+            "Nama Produk": st.column_config.TextColumn(
+                "Nama Produk", width="large", required=True
+            ),
+            "Jumlah": st.column_config.TextColumn(
+                "Jumlah", help="Contoh: 400 atau 9.000"
+            ),
+            "Harga Satuan": st.column_config.TextColumn(
+                "Harga Satuan", help="Contoh: 10.550"
+            ),
+        },
+    )
+    st.session_state[kunci_tabel] = edit.copy()
+
+    # Data yang divalidasi: nilai isian saat ini, bukan hasil OCR asli.
+    data = {
+        "nomor": nomor,
+        "penerima": penerima,
+        "proyek": proyek,
+        "produk": [
+            {
+                "nama": _sel_teks(baris["Nama Produk"]),
+                "jumlah": _sel_teks(baris["Jumlah"]),
+                "harga": _sel_teks(baris["Harga Satuan"]),
+            }
+            for _, baris in edit.iterrows()
+        ],
+    }
+
+    st.divider()
+    kol_simpan, kol_unduh = st.columns(2)
+
+    if kol_simpan.button("Simpan Data", type="primary", key=f"{kunci}_simpan"):
+        bersih, galat = validasi_transaksi(data)
+        if galat:
+            for pesan in galat:
+                st.error(pesan)
+            st.caption("Data belum disimpan. Perbaiki isian di atas.")
+        else:
+            try:
+                id_transaksi, baru = simpan_transaksi(bersih, nama_file=nama)
+            except Exception as galat_db:
+                st.error(
+                    "Data gagal disimpan: "
+                    f"{type(galat_db).__name__}: {galat_db}"
+                )
+            else:
+                # Data terkonfirmasi disimpan terpisah dari hasil OCR dan
+                # dipakai untuk tombol unduh.
+                st.session_state["ekstraksi_tersimpan"] = {
+                    "kunci": nama, "id": id_transaksi, "data": bersih,
+                }
+                if baru:
+                    st.success(
+                        "Data transaksi berhasil disimpan "
+                        f"(ID {id_transaksi}) dengan "
+                        f"{len(bersih['produk'])} produk."
+                    )
+                else:
+                    st.warning(
+                        "Data yang sama sudah tersimpan sebelumnya "
+                        f"(ID {id_transaksi}), jadi tidak disimpan ulang."
+                    )
+
+    tersimpan = st.session_state.get("ekstraksi_tersimpan") or {}
+    siap_unduh = tersimpan.get("kunci") == nama and tersimpan.get("data")
+
+    if siap_unduh:
+        st.info(
+            f"Data terkonfirmasi: ID {tersimpan['id']} — "
+            f"{len(tersimpan['data']['produk'])} produk. Siap diunduh."
+        )
+        kol_unduh.download_button(
+            "Unduh Hasil",
+            data=buat_csv(tersimpan["data"]),
+            file_name=f"transaksi_{Path(nama).stem}.csv",
+            mime="text/csv",
+            key=f"{kunci}_unduh",
+        )
+    else:
+        kol_unduh.download_button(
+            "Unduh Hasil",
+            data=b"",
+            file_name=f"transaksi_{Path(nama).stem}.csv",
+            mime="text/csv",
+            key=f"{kunci}_unduh",
+            disabled=True,
+            help="Simpan data dulu agar hasil yang terkonfirmasi bisa diunduh.",
+        )
+
+
 RASIO_VALIDASI = 0.20  # mengikuti konstanta VALIDASI di scripts/latih_cnn.py
 
 
@@ -1106,7 +1336,7 @@ def halaman_business_understanding():
         ```
         Upload Nota  →  Image Preprocessing  →  Deteksi Field
               →  Segmentasi Karakter  →  Pengenalan CNN + Template Matching
-              →  Evaluasi CER
+              →  Hasil Ekstraksi (koreksi manual + simpan)  →  Evaluasi CER
         ```
         """
     )
@@ -1126,6 +1356,9 @@ def halaman_business_understanding():
         ("Pengenalan CNN + Template Matching",
          "Template Matching mencocokkan bentuk potongan dengan template, "
          "CNN mengenali tiap karakter hasil segmentasi."),
+        ("Hasil Ekstraksi",
+         "Hasil OCR diperiksa dan dikoreksi manual, lalu disimpan sebagai "
+         "data transaksi beserta detail produknya."),
         ("Evaluasi CER",
          "Teks hasil OCR dibandingkan dengan ground truth, lalu diukur "
          "dengan CER."),
@@ -1303,7 +1536,7 @@ def halaman_evaluasi():
         )
 
 
-# Routing enam halaman
+# Routing tujuh halaman
 st.sidebar.title("MERRI-STOCK")
 st.sidebar.caption("Sistem Pengenalan Teks Nota Transaksi CV Merriena Jaya")
 
@@ -1316,6 +1549,7 @@ HALAMAN_UPLOAD = "Upload Nota"
 HALAMAN_PREPROSES = "Preprocessing"
 HALAMAN_SEGMEN = "Segmentasi Karakter"
 HALAMAN_KENAL = "Pengenalan Karakter"
+HALAMAN_EKSTRAKSI = "Hasil Ekstraksi"
 HALAMAN_EVAL = "Evaluasi"
 
 HALAMAN = [
@@ -1324,6 +1558,7 @@ HALAMAN = [
     HALAMAN_PREPROSES,
     HALAMAN_SEGMEN,
     HALAMAN_KENAL,
+    HALAMAN_EKSTRAKSI,
     HALAMAN_EVAL,
 ]
 
@@ -1342,6 +1577,8 @@ elif halaman == HALAMAN_SEGMEN:
     halaman_segmentasi()
 elif halaman == HALAMAN_KENAL:
     halaman_pengenalan()
+elif halaman == HALAMAN_EKSTRAKSI:
+    halaman_hasil_ekstraksi()
 elif halaman == HALAMAN_EVAL:
     halaman_evaluasi()
 else:

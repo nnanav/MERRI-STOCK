@@ -35,9 +35,9 @@ angka, nama file, nama fungsi, atau urutan tahap.
   terstruktur per field.
 - **Objek penelitian:** nota transaksi **CV Merriena Jaya** (Sido Makmur,
   Samarinda, Kalimantan Timur).
-- **Bentuk aplikasi:** dashboard web **Streamlit** dengan 6 halaman:
+- **Bentuk aplikasi:** dashboard web **Streamlit** dengan 7 halaman:
   Business Understanding, Upload Nota, Preprocessing, Segmentasi Karakter,
-  Pengenalan Karakter, Evaluasi.
+  Pengenalan Karakter, Hasil Ekstraksi, Evaluasi.
 - **Masukan:** satu berkas gambar nota (JPG/PNG).
 - **Keluaran:** teks per field, yaitu **nomor nota, nama penerima, proyek,
   nama produk, jumlah, satuan, dan harga satuan**.
@@ -160,6 +160,27 @@ angka, nama file, nama fungsi, atau urutan tahap.
   (patience 5, memantau `val_loss`).
 - Model disimpan di `models/cnn_karakter.keras`, daftar label di
   `models/labels.json`.
+
+### Hasil ekstraksi dan penyimpanan
+
+- Halaman **Hasil Ekstraksi** dipakai untuk memeriksa dan mengoreksi hasil
+  OCR, lalu menyimpannya sebagai data transaksi.
+- Halaman ini **memakai hasil OCR yang sudah ada** dari halaman Pengenalan
+  Karakter dan **tidak menjalankan OCR ulang**. Hasil OCR asli tidak diubah;
+  nilai koreksi disimpan terpisah.
+- Isian: nomor nota, nama penerima, proyek, serta tabel produk (nama produk,
+  jumlah, harga satuan) yang dapat ditambah/hapus barisnya.
+- Validasi: field teks wajib diisi, jumlah harus angka positif, harga satuan
+  tidak negatif. Angka format Indonesia (`9.000`, `10.550`, `9.000,00`)
+  dibaca sesuai nilainya; angka rusak seperti `9.000P00` atau `200a000`
+  ditolak dan harus diperbaiki pengguna.
+- Penyimpanan memakai **SQLite** di `database/transaksi.db` dengan dua tabel:
+  `transaksi` dan `transaksi_produk`. Sidik isi data mencegah penyimpanan
+  ganda akibat klik berulang atau rerun.
+- Tombol **Unduh Hasil** menghasilkan **CSV** dengan satu baris per produk,
+  dan hanya aktif setelah data tersimpan (terkonfirmasi). Hasil OCR mentah
+  tidak pernah diunduh sebagai data terverifikasi.
+- Halaman **Evaluasi tetap memakai hasil OCR**, bukan hasil koreksi manual.
 
 ### Evaluasi
 

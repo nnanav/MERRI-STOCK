@@ -43,6 +43,9 @@ def main():
     at.sidebar.radio[0].set_value("Pengenalan Karakter").run()
     print("Pengenalan exception:", [e.value for e in at.exception])
 
+    at.sidebar.radio[0].set_value("Hasil Ekstraksi").run()
+    print("Hasil Ekstraksi exception:", [e.value for e in at.exception])
+
     at.sidebar.radio[0].set_value("Evaluasi").run()
     print("Evaluasi exception:", [e.value for e in at.exception])
 

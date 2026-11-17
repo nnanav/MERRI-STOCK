@@ -20,6 +20,9 @@ hasil_deteksi_baris/
 hasil_deteksi_field/
 hasil_uji_produk/
 
+# --- Data transaksi pengguna (SQLite, bukan untuk diunggah) ---
+database/
+
 # --- Log & file sementara ---
 *.log
 *.tmp
