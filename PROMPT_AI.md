@@ -120,8 +120,9 @@ angka, nama file, nama fungsi, atau urutan tahap.
   seluruh template dataset memakai cosine similarity, lalu hasilnya dipakai
   untuk menandai apakah kedua metode sepakat atau tidak.
 - Alasan CNN dijadikan penentu: pada pengujian, CNN lebih akurat
-  (rata-rata CER 7,57%) dibanding Template Matching saja (12,56%), dan CNN
-  lebih baik pada 27 dari 27 field yang diuji.
+  (rata-rata CER 7,57%) dibanding Template Matching saja (12,56%), dan
+  Template Matching **tidak pernah lebih baik pada satu field pun**
+  (0 dari 27 field).
 
 
 ### Dataset
