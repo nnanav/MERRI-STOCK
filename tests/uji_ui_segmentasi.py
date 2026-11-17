@@ -1,4 +1,4 @@
-"""Uji halaman Segmentasi: harus tanpa dropdown/expander, tanpa exception."""
+"""Uji UI Segmentasi: tanpa metrik & tabel ringkasan, hanya kartu per field."""
 
 import sys
 from pathlib import Path
@@ -12,25 +12,51 @@ import app as appmod  # noqa: E402
 from processing.pemrosesan_field import baca_gambar  # noqa: E402
 
 APP = BASE / "app.py"
-NOTA = BASE / "data_uji" / "nota_52.jpeg"
-gambar = baca_gambar(NOTA)
-det = appmod.jalankan_deteksi(gambar)
-ocr = appmod.jalankan_ocr_semua(det, False)
+LOG = BASE / "output" / "hasil_uji_ui.txt"
+baris = []
 
-at = AppTest.from_file(str(APP), default_timeout=600)
-at.run()
-at.session_state["gambar_bgr"] = gambar
-at.session_state["nama_file"] = "nota_52.jpeg"
-at.session_state["deteksi"] = det
-at.session_state["ocr_semua"] = ocr
-at.session_state["ocr_kunci"] = ("nota_52.jpeg",)
-at.sidebar.radio[0].set_value("Segmentasi Karakter").run()
 
-print("exception   :", [e.value for e in at.exception])
-print("expander    :", len(at.expander), "(harus 0)")
-print("subheader   :", [h.value for h in at.subheader])
-print("markdown    :", len(at.markdown))
-print("dataframe   :", len(at.dataframe))
-print("metric      :", [(m.label, m.value) for m in at.metric])
-print("code        :", len(at.code))
-print("caption     :", len(at.caption))
+def catat(t):
+    baris.append(str(t))
+    print(t, flush=True)
+
+
+for nama in ("nota_52.jpeg", "nota_22.jpeg"):
+    path = None
+    for d in (BASE / "data_nota_asli", BASE / "data_uji"):
+        if (d / nama).exists():
+            path = d / nama
+            break
+    if path is None:
+        catat(f"{nama}: tidak ada")
+        continue
+
+    gambar = baca_gambar(path)
+    det = appmod.jalankan_deteksi(gambar)
+    ocr = appmod.jalankan_ocr_semua(det, False)
+
+    at = AppTest.from_file(str(APP), default_timeout=900)
+    at.run()
+    at.session_state["gambar_bgr"] = gambar
+    at.session_state["nama_file"] = nama
+    at.session_state["deteksi"] = det
+    at.session_state["ocr_semua"] = ocr
+    at.session_state["ocr_kunci"] = (nama,)
+    at.sidebar.radio[0].set_value("Segmentasi Karakter").run()
+
+    teks_md = " ".join(str(getattr(el, "value", "")) for el in at.markdown)
+
+    catat(f"=== {nama} ({len(det['fields'])} field) ===")
+    catat(f"  exception : {[e.value for e in at.exception]}")
+    catat(f"  expander  : {len(at.expander)} (harus 0)")
+    catat(f"  metric    : {len(at.metric)} (harus 0)")
+    catat(f"  dataframe : {len(at.dataframe)} (harus 0)")
+    catat(f"  subheader : {[h.value for h in at.subheader]}")
+    catat(f"  kartu     : {teks_md.count('kotak karakter')}")
+    catat(f"  kode blok : {len(at.code)}")
+    catat(f"  ada 'Ringkasan seluruh field': "
+          f"{'Ringkasan seluruh field' in teks_md}")
+
+LOG.write_text("\n".join(baris), encoding="utf-8")
+
+

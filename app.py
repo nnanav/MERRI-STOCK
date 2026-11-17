@@ -787,9 +787,9 @@ def halaman_segmentasi():
         "pengenalan sebenarnya (CNN + Template Matching)."
     )
 
-    # Hitung seluruh field lebih dulu agar ringkasan di atas bisa ditampilkan
-    # tanpa perlu membuka satu per satu. Hasil segmentasi sudah di-cache,
-    # sehingga langkah ini tidak memperlambat halaman.
+    # Hitung segmentasi seluruh field lebih dulu, lalu tampilkan sebagai
+    # kartu per field. Hasil segmentasi sudah di-cache sehingga langkah ini
+    # tidak memperlambat halaman.
     data_field = []
     for f in det["fields"]:
         crop = f.get("crop_show")
@@ -806,46 +806,6 @@ def halaman_segmentasi():
             "field": f, "crop": crop, "vis": vis,
             "karakter": karakter, "teks": teks, "ada": True,
         })
-
-    total_field = len(data_field)
-    total_kotak = sum(len(d["karakter"]) for d in data_field)
-    field_terbaca = sum(1 for d in data_field if d["teks"])
-    field_kosong = sum(1 for d in data_field if not d["ada"])
-
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Field tersegmentasi", total_field)
-    m2.metric("Total kotak karakter", total_kotak)
-    m3.metric("Field terbaca", f"{field_terbaca}/{total_field}")
-    m4.metric("Field tanpa crop", field_kosong)
-
-    st.markdown("**Ringkasan seluruh field**")
-    st.dataframe(
-        [
-            {
-                "Field": d["field"]["label"],
-                "Jenis": LABEL_JENIS.get(d["field"].get("jenis"), "-"),
-                "Kotak": len(d["karakter"]),
-                "Hasil OCR": d["teks"] or "(belum terbaca)",
-            }
-            for d in data_field
-        ],
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Field": st.column_config.TextColumn("Field", width="medium"),
-            "Jenis": st.column_config.TextColumn("Jenis", width="small"),
-            "Kotak": st.column_config.NumberColumn("Kotak", width="small"),
-            "Hasil OCR": st.column_config.TextColumn(
-                "Hasil OCR", width="large"
-            ),
-        },
-    )
-
-    st.markdown("**Detail per field**")
-    st.caption(
-        "Setiap kartu menampilkan citra asli field, bounding box tiap "
-        "karakter, dan urutan karakter hasil segmentasi."
-    )
 
     # Tampilkan sebagai kartu, dikelompokkan per jenis field, dua kolom.
     urutan_jenis = ["nomor", "penerima", "proyek", "produk", "jumlah",
