@@ -20,7 +20,6 @@ from processing.pemrosesan_field import (
     isolasi_nomor, bersihkan_minus, pisah_jumlah_satuan,
     cari_tanggal, baca_gambar, segmentasi_per_karakter,
 )
-from processing.ground_truth import gt_field
 from processing.preprocessing_nota import preprocess_nota
 
 BASE = Path(__file__).resolve().parent
@@ -1525,6 +1524,72 @@ def halaman_business_understanding():
 JENIS_DIEVALUASI = ("nomor", "penerima", "proyek", "produk", "jumlah", "harga")
 
 
+def _isi_gt(kunci_widget, kunci_gt):
+    """
+    Gabungkan Ground Truth tersimpan dengan suntingan terbaru data_editor.
+
+    Nilai GT disimpan pada kunci session_state tersendiri (bukan kunci
+    widget), karena nilai widget tidak boleh diubah lewat st.session_state.
+    Hasilnya dibaca SEBELUM tabel dirender, sehingga Status dan ringkasan
+    ikut berubah pada rerun yang sama saat pengguna mengetik.
+
+    Mengembalikan dict {indeks baris: teks Ground Truth}.
+    """
+    tersimpan = st.session_state.get(kunci_gt)
+    isi = {}
+    if isinstance(tersimpan, dict):
+        isi = {int(k): str(v or "") for k, v in tersimpan.items()}
+
+    state = st.session_state.get(kunci_widget)
+    if isinstance(state, dict):
+        for indeks, ubah in (state.get("edited_rows") or {}).items():
+            if isinstance(ubah, dict) and "Ground Truth" in ubah:
+                isi[int(indeks)] = str(ubah["Ground Truth"] or "")
+
+    st.session_state[kunci_gt] = isi
+    return isi
+
+
+def _data_evaluasi(det, hasil, isi_gt):
+    """
+    Susun baris evaluasi dari hasil deteksi dan hasil OCR.
+
+    Ground Truth TIDAK diambil otomatis dari file acuan: kolomnya dibiarkan
+    kosong dan diisi sendiri oleh pengguna dengan membaca nota asli. Status
+    baru ditentukan setelah Ground Truth terisi.
+
+    Hasil OCR tidak pernah diubah di sini.
+    """
+    baris = []
+    for f in det["fields"]:
+        # Hanya enam jenis field yang dinilai; field lain dilewati.
+        if f.get("jenis") not in JENIS_DIEVALUASI:
+            continue
+
+        t = (hasil.get(f["id"], {}) or {}).get("tanpa", {}) or {}
+        teks = t.get("teks", "") or ""
+        gt = str(isi_gt.get(len(baris), "") or "")
+
+        # Status ditentukan dari perbandingan teks utuh: sama persis atau
+        # tidak. Normalisasi hanya merapikan spasi, bukan mengubah huruf,
+        # angka, atau tanda baca.
+        gt_norm = normalisasi_teks(gt)
+        if not gt_norm:
+            status = "Belum diisi"
+        elif gt_norm == normalisasi_teks(teks):
+            status = "Benar"
+        else:
+            status = "Salah"
+
+        baris.append({
+            "Field": f["label"],
+            "Ground Truth": gt,
+            "Hasil OCR": teks or "(kosong)",
+            "Status": status,
+        })
+    return baris
+
+
 def halaman_evaluasi():
     st.header("Evaluasi Hasil Pengenalan OCR")
     st.caption(
@@ -1547,59 +1612,62 @@ def halaman_evaluasi():
         return
 
     nama = st.session_state.get("nama_file", "")
-    baris = []
-    benar = 0
-    salah = 0
-    tanpa_gt = 0
+    kunci_base = f"evaluasi_{nama}_tabel"
+    kunci_gt = f"evaluasi_{nama}_gt"
+    kunci_versi = f"evaluasi_{nama}_versi"
 
-    for f in det["fields"]:
-        # Hanya enam jenis field yang dinilai; field lain dilewati.
-        if f.get("jenis") not in JENIS_DIEVALUASI:
-            continue
-
-        gt = gt_field(nama, f["id"])
-        t = (hasil.get(f["id"], {}) or {}).get("tanpa", {}) or {}
-        teks = t.get("teks", "") or ""
-
-        if not normalisasi_teks(gt):
-            # Ground truth kosong: field tidak bisa dinilai. Baris tetap
-            # ditampilkan agar evaluasi transparan.
-            tanpa_gt += 1
-            baris.append({
-                "Field": f["label"],
-                "Ground Truth": "(tidak tersedia)",
-                "Hasil OCR": teks or "(kosong)",
-                "Status": "Tanpa GT",
-            })
-            continue
-
-        # Status ditentukan dari perbandingan teks utuh: sama persis atau
-        # tidak. Normalisasi hanya merapikan spasi, bukan mengubah huruf,
-        # angka, atau tanda baca.
-        cocok = normalisasi_teks(gt) == normalisasi_teks(teks)
-        benar += int(cocok)
-        salah += int(not cocok)
-
-        baris.append({
-            "Field": f["label"],
-            "Ground Truth": gt,
-            "Hasil OCR": teks or "(kosong)",
-            "Status": "Benar" if cocok else "Salah",
-        })
+    # Versi dipakai agar tombol Kosongkan GT bisa memakai widget baru dengan
+    # state kosong, tanpa mengubah nilai widget yang sudah dirender.
+    versi = int(st.session_state.get(kunci_versi, 0) or 0)
+    kunci_widget = f"{kunci_base}_v{versi}"
 
     st.subheader("Hasil evaluasi per field")
     st.caption(
-        "Ground Truth adalah acuan yang dibaca manual dari nota asli, "
-        "sedangkan Hasil OCR adalah keluaran sistem."
+        "Ground Truth diisi sendiri dengan mengetik isi field yang terbaca "
+        "dari nota asli; Hasil OCR adalah keluaran sistem. Status Benar bila "
+        "isinya sama persis."
     )
-    st.dataframe(
-        baris,
-        use_container_width=True,
+
+    isi_gt = _isi_gt(kunci_widget, kunci_gt)
+
+    # Tombol dijalankan SEBELUM data_editor dibuat, karena state widget tidak
+    # boleh diubah setelah widgetnya dirender pada run yang sama.
+    kol_info, kol_reset = st.columns([4, 1])
+    with kol_reset:
+        if st.button(
+            "Kosongkan GT",
+            key=f"{kunci_base}_kosongkan",
+            disabled=not any(normalisasi_teks(v) for v in isi_gt.values()),
+            help="Hapus semua Ground Truth yang sudah diketik agar bisa "
+                 "diisi ulang dari awal.",
+        ):
+            st.session_state[kunci_gt] = {}
+            versi += 1
+            st.session_state[kunci_versi] = versi
+            kunci_widget = f"{kunci_base}_v{versi}"
+            isi_gt = {}
+
+    baris = _data_evaluasi(det, hasil, isi_gt)
+
+    tabel = pd.DataFrame([
+        {k: b[k] for k in ("Field", "Ground Truth", "Hasil OCR", "Status")}
+        for b in baris
+    ])
+
+    st.data_editor(
+        tabel,
+        key=kunci_widget,
+        num_rows="fixed",
         hide_index=True,
+        width="stretch",
+        disabled=["Field", "Hasil OCR", "Status"],
         column_config={
             "Field": st.column_config.TextColumn("Field", width="medium"),
             "Ground Truth": st.column_config.TextColumn(
-                "Ground Truth", width="large"
+                "Ground Truth",
+                width="large",
+                help="Klik sel lalu ketik isi field sesuai nota asli. "
+                     "Sel kosong berarti belum diisi.",
             ),
             "Hasil OCR": st.column_config.TextColumn(
                 "Hasil OCR", width="large"
@@ -1608,23 +1676,39 @@ def halaman_evaluasi():
         },
     )
 
+    terisi = sum(1 for b in baris if normalisasi_teks(b["Ground Truth"]))
+    if terisi:
+        kol_info.info(
+            f"{terisi} dari {len(baris)} field sudah diisi Ground Truth. "
+            "Status dan ringkasan di bawah dihitung dari isian tersebut."
+        )
+    else:
+        kol_info.caption(
+            "Belum ada Ground Truth yang diisi. Klik sel pada kolom Ground "
+            "Truth untuk mengisinya sesuai nota asli."
+        )
+
+    benar = sum(1 for b in baris if b["Status"] == "Benar")
+    salah = sum(1 for b in baris if b["Status"] == "Salah")
+    belum = sum(1 for b in baris if b["Status"] == "Belum diisi")
+
     dievaluasi = benar + salah
     akurasi = (benar / dievaluasi * 100.0) if dievaluasi else 0.0
 
     st.subheader("Ringkasan")
     st.caption(
-        "Ringkasan dihitung dari exact match per field. Field tanpa Ground "
-        "Truth tidak ikut dihitung."
+        "Ringkasan dihitung dari exact match per field. Field yang Ground "
+        "Truth-nya belum diisi tidak ikut dihitung."
     )
     k1, k2, k3 = st.columns(3)
     k1.metric("Field benar", benar)
     k2.metric("Field salah", salah)
     k3.metric("Persentase benar", f"{akurasi:.2f}%")
 
-    if tanpa_gt:
+    if belum:
         st.info(
-            f"{tanpa_gt} field tidak memiliki Ground Truth sehingga tidak "
-            "dihitung dalam ringkasan."
+            f"{belum} field belum diisi Ground Truth sehingga tidak dihitung "
+            "dalam ringkasan. Isi kolom Ground Truth pada tabel di atas."
         )
 
 

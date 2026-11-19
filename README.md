@@ -125,6 +125,18 @@ OCR tersebut.
   produk. Tombol aktif setelah data tersimpan, sehingga yang diunduh hanya data
   yang sudah dikoreksi dan dikonfirmasi.
 
+## Evaluasi
+
+Halaman **Evaluasi** membandingkan hasil OCR dengan Ground Truth per field.
+Kolom **Ground Truth diisi sendiri** dengan mengetik isi field sesuai nota asli;
+halaman ini tidak mengisi otomatis dari file acuan. Selama belum diisi, status
+field tersebut **Belum diisi** dan tidak ikut dihitung pada ringkasan. Status
+**Benar** hanya bila isinya sama persis, dan tombol **Kosongkan GT** menghapus
+semua isian agar bisa diisi ulang.
+
+Acuan Ground Truth untuk penelitian tetap ada di `processing/ground_truth.py`
+dan dipakai skrip `tests/ukur_cer.py` saat mengukur CER.
+
 ## Pengujian
 
 ```powershell

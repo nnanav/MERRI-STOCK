@@ -71,9 +71,10 @@ angka, nama file, nama fungsi, atau urutan tahap.
    disimpan. Simpan Data memvalidasi isian lalu menyimpannya ke SQLite;
    Unduh Hasil menghasilkan CSV satu baris per produk dan aktif setelah data
    tersimpan.
-7. **Evaluasi** — perbandingan hasil OCR dengan Ground Truth nota asli per
-   field; status Benar bila seluruh isi field sama persis. Ringkasan dihitung
-   dari exact match per field.
+7. **Evaluasi** — perbandingan hasil OCR dengan Ground Truth per field.
+   Ground Truth **diisi sendiri** oleh pengguna dengan membaca nota asli;
+   status Benar bila seluruh isi field sama persis. Ringkasan dihitung dari
+   exact match per field.
 
 ### Teknologi
 
@@ -219,14 +220,24 @@ angka, nama file, nama fungsi, atau urutan tahap.
 
 - Halaman **Evaluasi** menampilkan tabel per field dengan kolom:
   **Field, Ground Truth, Hasil OCR, Status**.
+- Kolom **Ground Truth diisi sendiri oleh pengguna** dengan mengetik isi field
+  yang terbaca dari nota asli. Halaman ini **tidak** mengisi Ground Truth
+  otomatis dari file acuan.
+- Selama Ground Truth belum diisi, status field tersebut adalah
+  **Belum diisi** dan tidak ikut dihitung pada ringkasan.
 - Status **Benar** diberikan hanya bila seluruh isi field **sama persis**
-  dengan ground truth; selain itu **Salah**.
+  dengan Ground Truth yang diisi; selain itu **Salah**.
+- Tombol **Kosongkan GT** menghapus semua isian Ground Truth agar bisa diisi
+  ulang dari awal.
 - Normalisasi teks sebelum perbandingan hanya merapikan spasi (spasi
   berlebih dijadikan satu, spasi tepi dibuang). Huruf, angka, dan tanda
   baca **tidak** diubah, sehingga perbedaan sekecil apa pun tetap dihitung
   sebagai kesalahan.
 - Ringkasan berisi tiga angka: jumlah field benar, jumlah field salah, dan
   persentase benar.
+- Acuan Ground Truth untuk penelitian tetap tersimpan di
+  `processing/ground_truth.py`, tetapi dipakai oleh skrip pengukuran
+  (`tests/ukur_cer.py`), bukan untuk mengisi halaman Evaluasi.
 - **CER (Character Error Rate) tidak lagi ditampilkan di aplikasi.**
   Perhitungan CER tetap tersedia sebagai alat ukur penelitian melalui skrip
   `tests/ukur_cer.py`.
