@@ -9,7 +9,9 @@ env/
 .pytest_cache/
 
 # --- Streamlit ---
-.streamlit/
+# config.toml ikut di-commit agar tema aplikasi konsisten.
+.streamlit/*
+!.streamlit/config.toml
 
 # --- Hasil pengujian (dibuat ulang saat program jalan) ---
 output/

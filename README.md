@@ -33,6 +33,8 @@ dari layar saat presentasi.
 
 ```
 app.py                  Dashboard Streamlit (7 halaman)
+ui/tema.py              Tema visual terpusat: CSS, header halaman, sidebar
+.streamlit/config.toml  Token tema dasar Streamlit (warna & font)
 PROMPT_AI.md            Prompt siap pakai untuk meminta AI menjelaskan program
 requirements.txt        Daftar dependensi
 processing/             Modul inti pengolahan citra dan OCR
@@ -124,6 +126,32 @@ OCR tersebut.
 - **Unduh.** Tombol **Unduh Hasil** menghasilkan CSV dengan satu baris per
   produk. Tombol aktif setelah data tersimpan, sehingga yang diunduh hanya data
   yang sudah dikoreksi dan dikonfirmasi.
+
+## Tampilan (UI/UX)
+
+Seluruh halaman memakai satu tema **Light Professional Dashboard** yang
+didefinisikan di `ui/tema.py`:
+
+| Token | Nilai |
+|---|---|
+| Navy (sidebar, judul) | `#142D4E` |
+| Teal (tombol utama, aksen) | `#0D9488` |
+| Latar konten | `#F4F7FB` |
+| Panel | `#FFFFFF` |
+| Border | `#DCE5EF` |
+| Teks sekunder | `#64748B` |
+
+- **Sidebar navy** berisi identitas MERRI-STOCK, CV Merriena Jaya, menu
+  berikon dengan penanda menu aktif, serta chip nota aktif.
+- **Navigasi** tetap memakai `st.radio` (state `navigasi` tidak berubah),
+  hanya tampilannya diubah menjadi daftar menu lewat CSS.
+- **Header halaman** memakai label langkah (mis. "Langkah 2 dari 6"), judul,
+  dan satu baris deskripsi.
+- **Panel** memakai `st.container(border=True)`; CSS hanya merapikan warna,
+  border, dan radius. Semua komponen interaktif tetap komponen native.
+
+CSS tambahan hanya menyasar atribut stabil (`data-testid`) agar tidak mudah
+rusak saat Streamlit diperbarui.
 
 ## Evaluasi
 

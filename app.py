@@ -21,10 +21,22 @@ from processing.pemrosesan_field import (
     cari_tanggal, baca_gambar, segmentasi_per_karakter,
 )
 from processing.preprocessing_nota import preprocess_nota
+from ui.tema import (
+    IKON, alur, kepala_halaman, legenda_status, pasang_tema, seksi,
+    sidebar_brand, sidebar_footer, sidebar_label_menu, sidebar_status,
+)
 
 BASE = Path(__file__).resolve().parent
 
-st.set_page_config(page_title="MERRI-STOCK", layout="wide")
+st.set_page_config(
+    page_title="MERRI-STOCK — Pengolahan Nota",
+    page_icon=":material/receipt_long:",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# Tema visual terpusat (CSS di ui/tema.py).
+pasang_tema()
 
 
 def gambar_rgb(img):
@@ -594,16 +606,29 @@ def _gambar_kotak(cimg, karakter):
 
 
 def halaman_upload():
-    st.header("Upload Nota")
-    st.caption(
+    kepala_halaman(
+        "Upload Nota",
         "Unggah satu gambar nota (JPG/PNG), lalu klik Proses Nota. Proses ini "
         "mendeteksi baris teks dengan adaptive threshold dan mencari lokasi "
-        "field memakai connected components."
+        "field memakai connected components.",
+        langkah="Langkah 1 dari 6",
+        ikon="upload",
     )
 
-    berkas = st.file_uploader(
-        "Unggah gambar nota", type=["png", "jpg", "jpeg"], key="unggah_nota"
-    )
+    kol_unggah, kol_panduan = st.columns([3, 2], gap="large")
+    with kol_unggah:
+        berkas = st.file_uploader(
+            "Unggah gambar nota", type=["png", "jpg", "jpeg"],
+            key="unggah_nota",
+        )
+    with kol_panduan:
+        with st.container(border=True):
+            st.markdown("**Panduan unggah**")
+            st.caption(
+                "Format didukung: JPG, JPEG, dan PNG. Unggah satu nota per "
+                "berkas, pastikan seluruh bagian nota terlihat, dan hindari "
+                "gambar yang terlalu gelap atau buram."
+            )
 
     if berkas is not None:
         baru = st.session_state.get("nama_file") != berkas.name
@@ -664,39 +689,46 @@ def halaman_upload():
         return
 
     st.success(f"Nota: {nama}")
-    st.image(gambar_rgb(gambar), use_container_width=True)
-    st.caption(
-        "Gambar asli hasil unggahan, belum dipotong maupun diperbaiki "
-        "kualitasnya. Perbaikan dilakukan pada halaman Preprocessing."
-    )
-
-    st.divider()
-    kol = st.columns([1, 2])
-    st.caption(
-        "Proses Nota memotong kertas nota, meluruskan perspektif, lalu "
-        "menyimpan hasil deteksi field untuk halaman berikutnya."
-    )
-    if kol[0].button("Proses Nota", type="primary", key="proses_nota"):
-        with st.spinner("Memproses nota (deteksi field)..."):
-            st.session_state["deteksi"] = jalankan_deteksi(gambar)
-            st.session_state["ocr_semua"] = None
-            st.session_state["ocr_kunci"] = None
-
-    if st.session_state.get("deteksi") is not None:
-        det = st.session_state["deteksi"]
-        kol[1].success(f"Nota berhasil diproses — {len(det['fields'])} field terdeteksi.")
-        st.info(
-            "Lanjutkan ke halaman Preprocessing, Segmentasi Karakter, "
-            "Pengenalan Karakter, Hasil Ekstraksi, lalu Evaluasi."
+    with st.container(border=True):
+        st.subheader("Pratinjau Nota")
+        st.image(gambar_rgb(gambar), width="stretch")
+        st.caption(
+            "Gambar asli hasil unggahan, belum dipotong maupun diperbaiki "
+            "kualitasnya. Perbaikan dilakukan pada halaman Preprocessing."
         )
+
+    with st.container(border=True):
+        st.subheader("Proses Nota")
+        st.caption(
+            "Proses Nota memotong kertas nota, meluruskan perspektif, lalu "
+            "menyimpan hasil deteksi field untuk halaman berikutnya."
+        )
+        kol = st.columns([1, 2])
+        if kol[0].button("Proses Nota", type="primary", key="proses_nota"):
+            with st.spinner("Memproses nota (deteksi field)..."):
+                st.session_state["deteksi"] = jalankan_deteksi(gambar)
+                st.session_state["ocr_semua"] = None
+                st.session_state["ocr_kunci"] = None
+
+        if st.session_state.get("deteksi") is not None:
+            det = st.session_state["deteksi"]
+            kol[1].success(
+                f"Nota berhasil diproses — {len(det['fields'])} field terdeteksi."
+            )
+            st.info(
+                "Lanjutkan ke halaman Preprocessing, Segmentasi Karakter, "
+                "Pengenalan Karakter, Hasil Ekstraksi, lalu Evaluasi."
+            )
 
 
 def halaman_preprocessing():
-    st.header("Preprocessing")
-    st.caption(
+    kepala_halaman(
+        "Preprocessing",
         "Menyiapkan gambar sebelum pengenalan: kertas nota dipotong dan "
         "diluruskan, kontras dinaikkan, lalu citra dibinerkan agar tulisan "
-        "terpisah dari latar."
+        "terpisah dari latar.",
+        langkah="Langkah 2 dari 6",
+        ikon="preproses",
     )
     gambar = st.session_state.get("gambar_bgr")
     if gambar is None:
@@ -720,18 +752,20 @@ def halaman_preprocessing():
         "gambar dipotong dan diluruskan memakai transformasi perspektif empat "
         "titik sudut agar teks sejajar."
     )
-    a, b = st.columns(2)
-    a.image(gambar_rgb(pp["asli"]), caption="Nota asli", width="stretch")
-    b.image(gambar_rgb(pp["crop"]), caption="Hasil crop kertas nota",
-            width="stretch")
+    with st.container(border=True):
+        a, b = st.columns(2)
+        a.image(gambar_rgb(pp["asli"]), caption="Nota asli", width="stretch")
+        b.image(gambar_rgb(pp["crop"]), caption="Hasil crop kertas nota",
+                width="stretch")
 
     st.subheader("2. Peningkatan kualitas gambar")
     st.caption(
         f"Metode yang dipakai: {pp['metode']}. Kontras dinaikkan pada kanal "
         "luminansi agar tulisan lebih tegas tanpa memperkuat noise kertas."
     )
-    st.image(gambar_rgb(tampil), caption="Hasil akhir preprocessing",
-             width="stretch")
+    with st.container(border=True):
+        st.image(gambar_rgb(tampil), caption="Hasil akhir preprocessing",
+                 width="stretch")
 
     st.subheader("3. Binerisasi")
     st.caption(
@@ -743,9 +777,10 @@ def halaman_preprocessing():
     _, otsu = cv2.threshold(
         abu, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
     )
-    c1, c2 = st.columns(2)
-    c1.image(abu, caption="Grayscale", width="stretch")
-    c2.image(otsu, caption="Binarisasi Otsu", width="stretch")
+    with st.container(border=True):
+        c1, c2 = st.columns(2)
+        c1.image(abu, caption="Grayscale", width="stretch")
+        c2.image(otsu, caption="Binarisasi Otsu", width="stretch")
 
 
 # Nama tampilan dan urutan jenis field. Dipakai bersama oleh halaman
@@ -773,11 +808,13 @@ JENIS_TAMPIL = tuple(jenis for jenis, _ in TAB_FIELD)
 
 
 def halaman_segmentasi():
-    st.header("Segmentasi Karakter")
-    st.caption(
+    kepala_halaman(
+        "Segmentasi Karakter",
         "Teks tiap field dipisah menjadi satu kotak per karakter memakai "
         "projection profile, yaitu hitungan piksel tinta per kolom. Bila "
-        "karakter menempel, Dynamic Programming memilih batas potong terbaik."
+        "karakter menempel, Dynamic Programming memilih batas potong terbaik.",
+        langkah="Langkah 3 dari 6",
+        ikon="segmen",
     )
     st.caption(
         "Setiap potongan karakter di bawah ini menjadi masukan halaman "
@@ -843,58 +880,60 @@ def halaman_segmentasi():
 
 def _tampilkan_field_segmen(f, d, label, jumlah_field, urutan):
     """Tampilkan satu field: informasi, citra, dan potongan tiap karakter."""
-    # Bila satu jenis field muncul beberapa kali (mis. beberapa baris
-    # produk), beri nomor agar tidak tertukar.
-    st.subheader(f"{label} {urutan}" if jumlah_field > 1 else label)
+    # Satu field dibungkus satu panel agar hasil tiap field mudah dibaca.
+    with st.container(border=True):
+        # Bila satu jenis field muncul beberapa kali (mis. beberapa baris
+        # produk), beri nomor agar tidak tertukar.
+        st.subheader(f"{label} {urutan}" if jumlah_field > 1 else label)
 
-    if d is None:
-        st.caption("Crop field ini tidak tersedia.")
-        return
+        if d is None:
+            st.caption("Crop field ini tidak tersedia.")
+            return
 
-    karakter = d["karakter"]
-    st.caption(f"{len(karakter)} karakter terdeteksi")
+        karakter = d["karakter"]
+        st.caption(f"{len(karakter)} karakter terdeteksi")
 
-    kiri, kanan = st.columns(2)
-    with kiri:
-        st.image(
-            gambar_rgb(d["crop"]),
-            caption="Citra asli field",
-            width="stretch",
-        )
-    with kanan:
-        if d["vis"] is not None:
+        kiri, kanan = st.columns(2)
+        with kiri:
             st.image(
-                gambar_rgb(d["vis"]),
-                caption="Bounding box karakter",
+                gambar_rgb(d["crop"]),
+                caption="Citra asli field",
                 width="stretch",
             )
-        else:
-            st.caption("Bounding box tidak tersedia.")
+        with kanan:
+            if d["vis"] is not None:
+                st.image(
+                    gambar_rgb(d["vis"]),
+                    caption="Bounding box karakter",
+                    width="stretch",
+                )
+            else:
+                st.caption("Bounding box tidak tersedia.")
 
-    st.markdown("**Hasil Pemisahan Karakter**")
+        st.markdown("**Hasil Pemisahan Karakter**")
 
-    if not karakter:
-        st.caption("Tidak ada karakter yang tersegmentasi.")
-        return
+        if not karakter:
+            st.caption("Tidak ada karakter yang tersegmentasi.")
+            return
 
-    # Maksimal 6 potongan per baris. Jumlah kolom dibuat tetap agar lebar
-    # gambar antar baris konsisten.
-    per_baris = 6
-    for mulai in range(0, len(karakter), per_baris):
-        irisan = karakter[mulai:mulai + per_baris]
-        kolom = st.columns(per_baris)
-        for slot, k in enumerate(irisan):
-            with kolom[slot]:
-                potong = d["crop"][k["y1"]:k["y2"], k["x1"]:k["x2"]]
-                nomor_karakter = mulai + slot + 1
-                if getattr(potong, "size", 0):
-                    st.image(
-                        gambar_rgb(potong),
-                        caption=f"Karakter {nomor_karakter}",
-                        width="stretch",
-                    )
-                else:
-                    st.caption(f"Karakter {nomor_karakter}")
+        # Maksimal 6 potongan per baris. Jumlah kolom dibuat tetap agar lebar
+        # gambar antar baris konsisten.
+        per_baris = 6
+        for mulai in range(0, len(karakter), per_baris):
+            irisan = karakter[mulai:mulai + per_baris]
+            kolom = st.columns(per_baris)
+            for slot, k in enumerate(irisan):
+                with kolom[slot]:
+                    potong = d["crop"][k["y1"]:k["y2"], k["x1"]:k["x2"]]
+                    nomor_karakter = mulai + slot + 1
+                    if getattr(potong, "size", 0):
+                        st.image(
+                            gambar_rgb(potong),
+                            caption=f"Karakter {nomor_karakter}",
+                            width="stretch",
+                        )
+                    else:
+                        st.caption(f"Karakter {nomor_karakter}")
 
 
 def kenali_satu(crop, pakai_clahe, jenis=None):
@@ -921,11 +960,13 @@ def jalankan_ocr_semua(det, sertakan_clahe):
 
 
 def halaman_pengenalan():
-    st.header("Pengenalan Karakter")
-    st.caption(
+    kepala_halaman(
+        "Pengenalan Karakter",
         "Tiap potongan karakter diseragamkan menjadi 32x32 piksel, lalu "
         "dikenali CNN sebagai penentu label dengan Template Matching sebagai "
-        "pendukung. Hasilnya disusun menjadi teks per field."
+        "pendukung. Hasilnya disusun menjadi teks per field.",
+        langkah="Langkah 4 dari 6",
+        ikon="kenal",
     )
 
     if st.session_state.get("gambar_bgr") is None:
@@ -972,32 +1013,45 @@ def halaman_pengenalan():
 
 def _tampilkan_field_kenal(f, t, label, jumlah_field, urutan):
     """Tampilkan satu field: crop, teks hasil OCR, dan jumlah karakter."""
-    # Bila satu jenis field muncul beberapa kali (mis. beberapa baris
-    # produk), beri nomor agar tidak tertukar.
-    st.subheader(f"{label} {urutan}" if jumlah_field > 1 else label)
+    # Satu field dibungkus satu panel agar hasil pembacaan mudah dibaca.
+    with st.container(border=True):
+        # Bila satu jenis field muncul beberapa kali (mis. beberapa baris
+        # produk), beri nomor agar tidak tertukar.
+        st.subheader(f"{label} {urutan}" if jumlah_field > 1 else label)
 
-    kiri, kanan = st.columns([1, 2])
-    with kiri:
-        crop = f.get("crop_show")
-        if crop is not None and getattr(crop, "size", 0):
-            st.image(
-                gambar_rgb(crop),
-                caption="Citra field",
-                width="stretch",
-            )
-        else:
-            st.caption("Crop field tidak tersedia.")
+        kiri, kanan = st.columns([1, 2], gap="large")
+        with kiri:
+            crop = f.get("crop_show")
+            if crop is not None and getattr(crop, "size", 0):
+                st.image(
+                    gambar_rgb(crop),
+                    caption="Citra field",
+                    width="stretch",
+                )
+            else:
+                st.caption("Crop field tidak tersedia.")
 
-    with kanan:
-        st.markdown("**Hasil OCR**")
-        teks = t.get("teks", "") or ""
-        if teks:
-            st.code(teks, language=None)
-        else:
-            st.caption("Belum terbaca.")
-        st.caption(f"Jumlah karakter: {t.get('n', 0)}")
-        if t.get("status", "").startswith("gagal"):
-            st.warning(t["status"])
+        with kanan:
+            st.markdown("**Hasil OCR**")
+            teks = t.get("teks", "") or ""
+            if teks:
+                st.code(teks, language=None)
+            else:
+                st.caption("Belum terbaca.")
+            st.caption(f"Jumlah karakter: {t.get('n', 0)}")
+
+            # Keluaran kedua metode ditampilkan apa adanya (tidak diubah):
+            # CNN sebagai penentu label, Template Matching sebagai pendukung.
+            cnn = str(t.get("cnn") or "").strip()
+            tm = str(t.get("tm") or "").strip()
+            if cnn or tm:
+                st.caption(
+                    f"CNN: {cnn or '-'}  ·  "
+                    f"Template Matching: {tm or '-'}"
+                )
+
+            if t.get("status", "").startswith("gagal"):
+                st.warning(t["status"])
 
 
 def _teks_ocr(hasil, field_id):
@@ -1091,89 +1145,87 @@ def halaman_hasil_ekstraksi():
         "dan koreksi dulu sebelum disimpan."
     )
 
-    st.subheader("Pratinjau Nota")
-    pratinjau, keterangan = _gambar_pratinjau(det, nama)
-
-    # gap="large" memberi jarak antara gambar dan keterangan agar teks
-    # tidak menempel pada tepi gambar.
-    kiri, kanan = st.columns([1, 2], gap="large")
-    with kiri:
-        st.image(
-            gambar_rgb(pratinjau),
-            caption=f"{keterangan} — {nama}",
-            width="stretch",
-        )
-    with kanan:
-        st.caption(
-            "Gambar di samping adalah hasil crop kertas nota setelah koreksi "
-            "perspektif dan peningkatan kualitas, bukan foto unggahan asli. " )
-            
-        st.caption(
-            "Mengubah isian di sini tidak mengubah hasil OCR maupun halaman "
-            "Evaluasi, karena koreksi disimpan terpisah."
-        )
-
     # Kunci widget memakai nama berkas, sehingga mengunggah nota baru
     # otomatis menampilkan form berisi hasil OCR nota baru itu.
     kunci = f"ekstraksi_{nama}"
+    pratinjau, keterangan = _gambar_pratinjau(det, nama)
 
-    st.subheader("Informasi Transaksi")
-    st.caption(
-        "Nilai awal diambil dari hasil OCR; perbaiki yang tidak sesuai dengan "
-        "nota. Nomor Nota, Nama Penerima, dan Proyek wajib diisi."
-    )
+    kol_kiri, kol_kanan = st.columns([1, 1.6], gap="large")
 
-    nomor = st.text_input(
-        "Nomor Nota", value=_teks_ocr(hasil, "nomor"), key=f"{kunci}_nomor"
-    )
-    kol_a, kol_b = st.columns(2)
-    penerima = kol_a.text_input(
-        "Nama Penerima", value=_teks_ocr(hasil, "penerima"),
-        key=f"{kunci}_penerima",
-    )
-    proyek = kol_b.text_input(
-        "Proyek", value=_teks_ocr(hasil, "proyek"), key=f"{kunci}_proyek"
-    )
+    with kol_kiri:
+        with st.container(border=True):
+            st.subheader("Pratinjau Nota")
+            st.image(
+                gambar_rgb(pratinjau),
+                caption=f"{keterangan} — {nama}",
+                width="stretch",
+            )
+            st.caption(
+                "Gambar hasil crop kertas nota setelah koreksi perspektif dan "
+                "peningkatan kualitas, bukan foto unggahan asli."
+            )
 
-    st.subheader("Produk")
-    st.caption(
-        "Satu baris untuk satu produk; tambah atau hapus baris sesuai isi "
-        "nota. Jumlah harus angka positif dan harga satuan tidak negatif, "
-        "dengan format Indonesia seperti 9.000 atau 10.550."
-    )
+    with kol_kanan:
+        with st.container(border=True):
+            st.subheader("Informasi Transaksi")
+            st.caption(
+                "Nilai awal diambil dari hasil OCR; perbaiki yang tidak sesuai "
+                "dengan nota. Nomor Nota, Nama Penerima, dan Proyek wajib diisi."
+            )
 
-    awal = _produk_dari_ocr(det, hasil)
-    if not awal:
-        awal = [{"Nama Produk": "", "Jumlah": "", "Harga Satuan": ""}]
+            nomor = st.text_input(
+                "Nomor Nota", value=_teks_ocr(hasil, "nomor"),
+                key=f"{kunci}_nomor",
+            )
+            kol_a, kol_b = st.columns(2)
+            penerima = kol_a.text_input(
+                "Nama Penerima", value=_teks_ocr(hasil, "penerima"),
+                key=f"{kunci}_penerima",
+            )
+            proyek = kol_b.text_input(
+                "Proyek", value=_teks_ocr(hasil, "proyek"),
+                key=f"{kunci}_proyek",
+            )
 
-    # Isi tabel disimpan di session_state agar hasil koreksi pengguna tidak
-    # hilang saat Streamlit rerun (mis. setelah tombol Simpan ditekan).
-    # Kuncinya memakai nama berkas, sehingga nota baru memakai tabel baru.
-    kunci_tabel = f"{kunci}_produk_data"
-    if kunci_tabel not in st.session_state:
-        st.session_state[kunci_tabel] = pd.DataFrame(
-            awal, columns=["Nama Produk", "Jumlah", "Harga Satuan"]
-        )
+        with st.container(border=True):
+            st.subheader("Produk")
+            st.caption(
+                "Satu baris untuk satu produk; tambah atau hapus baris sesuai "
+                "isi nota. Jumlah harus angka positif dan harga satuan tidak "
+                "negatif, dengan format Indonesia seperti 9.000 atau 10.550."
+            )
 
-    edit = st.data_editor(
-        st.session_state[kunci_tabel],
-        key=f"{kunci}_produk",
-        num_rows="dynamic",
-        hide_index=True,
-        width="stretch",
-        column_config={
-            "Nama Produk": st.column_config.TextColumn(
-                "Nama Produk", width="large", required=True
-            ),
-            "Jumlah": st.column_config.TextColumn(
-                "Jumlah", help="Contoh: 400 atau 9.000"
-            ),
-            "Harga Satuan": st.column_config.TextColumn(
-                "Harga Satuan", help="Contoh: 10.550"
-            ),
-        },
-    )
-    st.session_state[kunci_tabel] = edit.copy()
+            awal = _produk_dari_ocr(det, hasil)
+            if not awal:
+                awal = [{"Nama Produk": "", "Jumlah": "", "Harga Satuan": ""}]
+
+            # Isi tabel disimpan di session_state agar hasil koreksi pengguna
+            # tidak hilang saat Streamlit rerun (mis. setelah tombol Simpan).
+            kunci_tabel = f"{kunci}_produk_data"
+            if kunci_tabel not in st.session_state:
+                st.session_state[kunci_tabel] = pd.DataFrame(
+                    awal, columns=["Nama Produk", "Jumlah", "Harga Satuan"]
+                )
+
+            edit = st.data_editor(
+                st.session_state[kunci_tabel],
+                key=f"{kunci}_produk",
+                num_rows="dynamic",
+                hide_index=True,
+                width="stretch",
+                column_config={
+                    "Nama Produk": st.column_config.TextColumn(
+                        "Nama Produk", width="large", required=True
+                    ),
+                    "Jumlah": st.column_config.TextColumn(
+                        "Jumlah", help="Contoh: 400 atau 9.000"
+                    ),
+                    "Harga Satuan": st.column_config.TextColumn(
+                        "Harga Satuan", help="Contoh: 10.550"
+                    ),
+                },
+            )
+            st.session_state[kunci_tabel] = edit.copy()
 
     # Data yang divalidasi: nilai isian saat ini, bukan hasil OCR asli.
     data = {
@@ -1191,70 +1243,77 @@ def halaman_hasil_ekstraksi():
     }
 
     st.divider()
-    st.caption(
-        "Simpan Data memvalidasi isian lalu menyimpannya ke basis data SQLite. "
-        "Unduh Hasil menghasilkan CSV satu baris per produk dan aktif setelah "
-        "data tersimpan."
-    )
-    kol_simpan, kol_unduh = st.columns(2)
+    with st.container(border=True):
+        st.markdown("**Simpan dan Unduh**")
+        st.caption(
+            "Simpan Data memvalidasi isian lalu menyimpannya ke basis data "
+            "SQLite. Unduh Hasil menghasilkan CSV satu baris per produk dan "
+            "aktif setelah data tersimpan."
+        )
+        kol_simpan, kol_unduh = st.columns(2)
 
-    if kol_simpan.button("Simpan Data", type="primary", key=f"{kunci}_simpan"):
-        bersih, galat = validasi_transaksi(data)
-        if galat:
-            for pesan in galat:
-                st.error(pesan)
-            st.caption("Data belum disimpan. Perbaiki isian di atas.")
-        else:
-            try:
-                id_transaksi, baru = simpan_transaksi(bersih, nama_file=nama)
-            except Exception as galat_db:
-                st.error(
-                    "Data gagal disimpan: "
-                    f"{type(galat_db).__name__}: {galat_db}"
-                )
+        if kol_simpan.button(
+            "Simpan Data", type="primary", key=f"{kunci}_simpan"
+        ):
+            bersih, galat = validasi_transaksi(data)
+            if galat:
+                for pesan in galat:
+                    st.error(pesan)
+                st.caption("Data belum disimpan. Perbaiki isian di atas.")
             else:
-                # Data terkonfirmasi disimpan terpisah dari hasil OCR dan
-                # dipakai untuk tombol unduh.
-                st.session_state["ekstraksi_tersimpan"] = {
-                    "kunci": nama, "id": id_transaksi, "data": bersih,
-                }
-                if baru:
-                    st.success(
-                        "Data transaksi berhasil disimpan "
-                        f"(ID {id_transaksi}) dengan "
-                        f"{len(bersih['produk'])} produk."
+                try:
+                    id_transaksi, baru = simpan_transaksi(
+                        bersih, nama_file=nama
+                    )
+                except Exception as galat_db:
+                    st.error(
+                        "Data gagal disimpan: "
+                        f"{type(galat_db).__name__}: {galat_db}"
                     )
                 else:
-                    st.warning(
-                        "Data yang sama sudah tersimpan sebelumnya "
-                        f"(ID {id_transaksi}), jadi tidak disimpan ulang."
-                    )
+                    # Data terkonfirmasi disimpan terpisah dari hasil OCR dan
+                    # dipakai untuk tombol unduh.
+                    st.session_state["ekstraksi_tersimpan"] = {
+                        "kunci": nama, "id": id_transaksi, "data": bersih,
+                    }
+                    if baru:
+                        st.success(
+                            "Data transaksi berhasil disimpan "
+                            f"(ID {id_transaksi}) dengan "
+                            f"{len(bersih['produk'])} produk."
+                        )
+                    else:
+                        st.warning(
+                            "Data yang sama sudah tersimpan sebelumnya "
+                            f"(ID {id_transaksi}), jadi tidak disimpan ulang."
+                        )
 
-    tersimpan = st.session_state.get("ekstraksi_tersimpan") or {}
-    siap_unduh = tersimpan.get("kunci") == nama and tersimpan.get("data")
+        tersimpan = st.session_state.get("ekstraksi_tersimpan") or {}
+        siap_unduh = tersimpan.get("kunci") == nama and tersimpan.get("data")
 
-    if siap_unduh:
-        st.info(
-            f"Data terkonfirmasi: ID {tersimpan['id']} — "
-            f"{len(tersimpan['data']['produk'])} produk. Siap diunduh."
-        )
-        kol_unduh.download_button(
-            "Unduh Hasil",
-            data=buat_csv(tersimpan["data"]),
-            file_name=f"transaksi_{Path(nama).stem}.csv",
-            mime="text/csv",
-            key=f"{kunci}_unduh",
-        )
-    else:
-        kol_unduh.download_button(
-            "Unduh Hasil",
-            data=b"",
-            file_name=f"transaksi_{Path(nama).stem}.csv",
-            mime="text/csv",
-            key=f"{kunci}_unduh",
-            disabled=True,
-            help="Simpan data dulu agar hasil yang terkonfirmasi bisa diunduh.",
-        )
+        if siap_unduh:
+            st.info(
+                f"Data terkonfirmasi: ID {tersimpan['id']} — "
+                f"{len(tersimpan['data']['produk'])} produk. Siap diunduh."
+            )
+            kol_unduh.download_button(
+                "Unduh Hasil",
+                data=buat_csv(tersimpan["data"]),
+                file_name=f"transaksi_{Path(nama).stem}.csv",
+                mime="text/csv",
+                key=f"{kunci}_unduh",
+            )
+        else:
+            kol_unduh.download_button(
+                "Unduh Hasil",
+                data=b"",
+                file_name=f"transaksi_{Path(nama).stem}.csv",
+                mime="text/csv",
+                key=f"{kunci}_unduh",
+                disabled=True,
+                help="Simpan data dulu agar hasil yang terkonfirmasi bisa "
+                     "diunduh.",
+            )
 
 
 RASIO_VALIDASI = 0.20  # mengikuti konstanta VALIDASI di scripts/latih_cnn.py
@@ -1371,58 +1430,56 @@ def info_dataset_latih():
 
 
 def halaman_business_understanding():
-    st.header("Business Understanding")
-    st.caption(
-        "Gambaran masalah, tujuan, alur sistem, dan data latih yang dipakai."
+    kepala_halaman(
+        "Business Understanding",
+        "Gambaran masalah, tujuan, alur sistem, dan data latih yang dipakai.",
+        langkah="Ikhtisar",
+        ikon="bu",
     )
 
     # 1. Latar Belakang
     st.subheader("1. Latar Belakang")
-
-    st.write(
-        "MERRI-STOCK digunakan untuk mengenali informasi pada nota transaksi "
-        "CV Merriena Jaya. Nota yang sebelumnya dibaca dan diketik manual "
-        "kini diubah menjadi teks oleh sistem, sehingga pengambilan data "
-        "transaksi menjadi lebih cepat dan konsisten."
-    )
-
-    st.write(
-        "Hasil pengenalan teks sangat dipengaruhi oleh kondisi gambar nota. "
-        "Perbedaan kualitas gambar, tingkat kontras, serta bentuk karakter "
-        "yang tidak seragam membuat karakter pada nota sulit dikenali. "
-        "Karena itu kualitas gambar perlu diperbaiki sebelum proses "
-        "pengenalan karakter dilakukan."
-    )
+    with st.container(border=True):
+        st.write(
+            "MERRI-STOCK digunakan untuk mengenali informasi pada nota "
+            "transaksi CV Merriena Jaya. Nota yang sebelumnya dibaca dan "
+            "diketik manual kini diubah menjadi teks oleh sistem, sehingga "
+            "pengambilan data transaksi menjadi lebih cepat dan konsisten."
+        )
+        st.write(
+            "Hasil pengenalan teks sangat dipengaruhi oleh kondisi gambar "
+            "nota. Perbedaan kualitas gambar, tingkat kontras, serta bentuk "
+            "karakter yang tidak seragam membuat karakter pada nota sulit "
+            "dikenali. Karena itu kualitas gambar perlu diperbaiki sebelum "
+            "proses pengenalan karakter dilakukan."
+        )
 
     # 2. Tujuan Sistem
     st.subheader("2. Tujuan Sistem")
-
-    st.write(
-        "Sistem ini bertujuan menganalisis pengaruh image preprocessing "
-        "terhadap akurasi pengenalan teks nota transaksi. Pengenalan "
-        "karakter dilakukan dengan CNN dan Template Matching yang "
-        "digabungkan dalam satu proses pengenalan karakter, lalu akurasinya "
-        "diukur menggunakan CER (Character Error Rate)."
-    )
-
-    st.info(
-        "Image preprocessing menjadi variabel yang dianalisis, sedangkan CNN "
-        "dan Template Matching adalah metode pengenalan yang bekerja "
-        "bersama pada satu proses yang sama."
-    )
+    with st.container(border=True):
+        st.write(
+            "Sistem ini bertujuan menganalisis pengaruh image preprocessing "
+            "terhadap akurasi pengenalan teks nota transaksi. Pengenalan "
+            "karakter dilakukan dengan CNN dan Template Matching yang "
+            "digabungkan dalam satu proses pengenalan karakter, lalu "
+            "akurasinya diukur menggunakan CER (Character Error Rate)."
+        )
+        st.info(
+            "Image preprocessing menjadi variabel yang dianalisis, sedangkan "
+            "CNN dan Template Matching adalah metode pengenalan yang bekerja "
+            "bersama pada satu proses yang sama."
+        )
 
     # 3. Alur Kerja Sistem
     st.subheader("3. Alur Kerja Sistem")
-
-    st.markdown(
-        """
-        ```
-        Upload Nota  →  Image Preprocessing  →  Deteksi Field
-              →  Segmentasi Karakter  →  Pengenalan CNN + Template Matching
-              →  Hasil Ekstraksi (koreksi manual + simpan)  →  Evaluasi CER
-        ```
-        """
+    st.caption(
+        "Urutan pengolahan satu nota dari gambar unggahan sampai data "
+        "transaksi yang siap disimpan."
     )
+    alur([
+        "Upload Nota", "Preprocessing", "Deteksi Field",
+        "Segmentasi Karakter", "Pengenalan", "Hasil Ekstraksi", "Evaluasi",
+    ])
 
     tahap = [
         ("Upload Nota",
@@ -1591,10 +1648,12 @@ def _data_evaluasi(det, hasil, isi_gt):
 
 
 def halaman_evaluasi():
-    st.header("Evaluasi Hasil Pengenalan OCR")
-    st.caption(
+    kepala_halaman(
+        "Evaluasi Hasil Pengenalan OCR",
         "Perbandingan hasil OCR dengan Ground Truth nota asli per field; "
-        "status Benar bila seluruh isi field sama persis."
+        "status Benar bila seluruh isi field sama persis.",
+        langkah="Langkah 6 dari 6",
+        ikon="evaluasi",
     )
 
     if st.session_state.get("gambar_bgr") is None:
@@ -1627,6 +1686,7 @@ def halaman_evaluasi():
         "dari nota asli; Hasil OCR adalah keluaran sistem. Status Benar bila "
         "isinya sama persis."
     )
+    legenda_status()
 
     isi_gt = _isi_gt(kunci_widget, kunci_gt)
 
@@ -1712,10 +1772,7 @@ def halaman_evaluasi():
         )
 
 
-# Routing tujuh halaman
-st.sidebar.title("MERRI-STOCK")
-st.sidebar.caption("Sistem Pengenalan Teks Nota Transaksi CV Merriena Jaya")
-
+# ---------------------------------------------------------------- Routing
 # Nama halaman disimpan sebagai konstanta dan dipakai untuk DAFTAR menu
 # maupun untuk routing. Sebelumnya keduanya ditulis terpisah sehingga
 # pernah tidak cocok ("Segmentasi Karakter" di menu vs "Segmentasi" di
@@ -1738,10 +1795,16 @@ HALAMAN = [
     HALAMAN_EVAL,
 ]
 
-halaman = st.sidebar.radio("Halaman", HALAMAN, key="navigasi")
+# ---------------------------------------------------------------- Sidebar
+sidebar_brand()
+sidebar_label_menu("Menu")
 
-if st.session_state.get("nama_file"):
-    st.sidebar.info(f"Nota aktif: {st.session_state['nama_file']}")
+halaman = st.sidebar.radio(
+    "Halaman", HALAMAN, key="navigasi", label_visibility="collapsed"
+)
+
+sidebar_status(st.session_state.get("nama_file"))
+sidebar_footer()
 
 if halaman == HALAMAN_BU:
     halaman_business_understanding()

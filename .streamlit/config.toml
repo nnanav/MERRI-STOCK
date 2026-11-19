@@ -1,0 +1,10 @@
+# Tema dasar Streamlit untuk MERRI-STOCK (Light Professional Dashboard).
+# Warna di sini dipakai widget native; detail tampilan diatur di ui/tema.py.
+
+[theme]
+base = "light"
+primaryColor = "#0D9488"
+backgroundColor = "#F4F7FB"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#142D4E"
+font = "sans serif"

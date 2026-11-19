@@ -44,6 +44,23 @@ angka, nama file, nama fungsi, atau urutan tahap.
   deteksi (untuk memisahkan jumlah dari satuannya), tetapi **tidak
   ditampilkan** di aplikasi karena bukan bagian data transaksi yang disimpan.
 
+### Tampilan aplikasi
+
+- Aplikasi memakai tema **Light Professional Dashboard** dengan palet:
+  Navy `#142D4E` (sidebar dan judul), Teal `#0D9488` (tombol utama dan
+  aksen), latar `#F4F7FB`, panel putih `#FFFFFF`, border `#DCE5EF`, dan
+  teks sekunder `#64748B`.
+- Tema didefinisikan terpusat di `ui/tema.py` (CSS + helper header halaman
+  dan sidebar). Token warna dasar juga disetel di `.streamlit/config.toml`.
+- Sidebar berwarna navy memuat identitas MERRI-STOCK, CV Merriena Jaya,
+  menu berikon dengan penanda menu aktif, dan chip nota aktif.
+- Navigasi tetap memakai widget `st.radio` (state `navigasi`), hanya
+  tampilannya diubah menjadi daftar menu melalui CSS.
+- Setiap halaman diawali label langkah (mis. "Langkah 2 dari 6"), judul,
+  dan satu baris deskripsi; isi dikelompokkan dalam panel putih.
+- Perubahan ini **hanya pada tampilan**; algoritma preprocessing,
+  segmentasi, CNN, Template Matching, ekstraksi, dan evaluasi tidak berubah.
+
 ### Fungsi tiap halaman (caption pada aplikasi)
 
 1. **Business Understanding** — gambaran masalah, tujuan, alur sistem, dan
