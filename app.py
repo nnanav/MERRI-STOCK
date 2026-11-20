@@ -22,8 +22,8 @@ from processing.pemrosesan_field import (
 )
 from processing.preprocessing_nota import preprocess_nota
 from ui.tema import (
-    IKON, alur, kepala_halaman, legenda_status, pasang_tema, seksi,
-    sidebar_brand, sidebar_footer, sidebar_label_menu, sidebar_status,
+    alur, kepala_halaman, legenda_status, pasang_tema, seksi,
+    sidebar_brand, sidebar_label_menu, sidebar_status,
 )
 
 BASE = Path(__file__).resolve().parent
@@ -611,8 +611,6 @@ def halaman_upload():
         "Unggah satu gambar nota (JPG/PNG), lalu klik Proses Nota. Proses ini "
         "mendeteksi baris teks dengan adaptive threshold dan mencari lokasi "
         "field memakai connected components.",
-        langkah="Langkah 1 dari 6",
-        ikon="upload",
     )
 
     kol_unggah, kol_panduan = st.columns([3, 2], gap="large")
@@ -727,8 +725,6 @@ def halaman_preprocessing():
         "Menyiapkan gambar sebelum pengenalan: kertas nota dipotong dan "
         "diluruskan, kontras dinaikkan, lalu citra dibinerkan agar tulisan "
         "terpisah dari latar.",
-        langkah="Langkah 2 dari 6",
-        ikon="preproses",
     )
     gambar = st.session_state.get("gambar_bgr")
     if gambar is None:
@@ -813,8 +809,6 @@ def halaman_segmentasi():
         "Teks tiap field dipisah menjadi satu kotak per karakter memakai "
         "projection profile, yaitu hitungan piksel tinta per kolom. Bila "
         "karakter menempel, Dynamic Programming memilih batas potong terbaik.",
-        langkah="Langkah 3 dari 6",
-        ikon="segmen",
     )
     st.caption(
         "Setiap potongan karakter di bawah ini menjadi masukan halaman "
@@ -965,8 +959,6 @@ def halaman_pengenalan():
         "Tiap potongan karakter diseragamkan menjadi 32x32 piksel, lalu "
         "dikenali CNN sebagai penentu label dengan Template Matching sebagai "
         "pendukung. Hasilnya disusun menjadi teks per field.",
-        langkah="Langkah 4 dari 6",
-        ikon="kenal",
     )
 
     if st.session_state.get("gambar_bgr") is None:
@@ -1433,8 +1425,6 @@ def halaman_business_understanding():
     kepala_halaman(
         "Business Understanding",
         "Gambaran masalah, tujuan, alur sistem, dan data latih yang dipakai.",
-        langkah="Ikhtisar",
-        ikon="bu",
     )
 
     # 1. Latar Belakang
@@ -1652,8 +1642,6 @@ def halaman_evaluasi():
         "Evaluasi Hasil Pengenalan OCR",
         "Perbandingan hasil OCR dengan Ground Truth nota asli per field; "
         "status Benar bila seluruh isi field sama persis.",
-        langkah="Langkah 6 dari 6",
-        ikon="evaluasi",
     )
 
     if st.session_state.get("gambar_bgr") is None:
@@ -1804,7 +1792,6 @@ halaman = st.sidebar.radio(
 )
 
 sidebar_status(st.session_state.get("nama_file"))
-sidebar_footer()
 
 if halaman == HALAMAN_BU:
     halaman_business_understanding()

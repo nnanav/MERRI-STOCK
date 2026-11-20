@@ -233,7 +233,7 @@ _CSS_SIDEBAR = """
 }
 
 .ms-brand-name {
-  color: #FFFFFF;
+  color: #FFFFFF !important;
   font-size: 1rem;
   font-weight: 700;
   letter-spacing: -0.01em;
@@ -241,7 +241,7 @@ _CSS_SIDEBAR = """
 }
 
 .ms-brand-sub {
-  color: #93A7BE;
+  color: #B9CBDE !important;
   font-size: 0.73rem;
   line-height: 1.45;
   margin-top: 0.12rem;
@@ -258,8 +258,8 @@ _CSS_SIDEBAR = """
 }
 
 /* Radio diubah menjadi daftar navigasi.
-   Struktur DOM (baseweb): label > input > div(mark) > div(label teks).
-   Mark disembunyikan lewat div:first-of-type agar teks tetap tampil. */
+   Struktur DOM (baseweb): label > div(teks) > input > div(mark radio).
+   Yang disembunyikan adalah MARK (div terakhir), teks tetap tampil. */
 [data-testid="stSidebar"] [data-testid="stRadioGroup"] { gap: 2px; }
 
 [data-testid="stSidebar"] [data-testid="stRadioGroup"] > label {
@@ -273,12 +273,14 @@ _CSS_SIDEBAR = """
 }
 
 [data-testid="stSidebar"] [data-testid="stRadioGroup"]
-  > label > div:first-of-type {
+  > label > div:last-of-type {
   display: none !important;
 }
 
-[data-testid="stSidebar"] [data-testid="stRadioGroup"] > label p {
-  color: #C7D5E4;
+[data-testid="stSidebar"] [data-testid="stRadioGroup"] > label p,
+[data-testid="stSidebar"] [data-testid="stRadioGroup"] > label span,
+[data-testid="stSidebar"] [data-testid="stRadioGroup"] > label div {
+  color: #E8EFF7 !important;
   font-size: 0.87rem;
   font-weight: 500;
   margin: 0;
@@ -286,11 +288,13 @@ _CSS_SIDEBAR = """
 }
 
 [data-testid="stSidebar"] [data-testid="stRadioGroup"] > label:hover {
-  background: rgba(255, 255, 255, 0.07);
+  background: rgba(255, 255, 255, 0.08);
 }
 
-[data-testid="stSidebar"] [data-testid="stRadioGroup"] > label:hover p {
-  color: #FFFFFF;
+[data-testid="stSidebar"] [data-testid="stRadioGroup"] > label:hover p,
+[data-testid="stSidebar"] [data-testid="stRadioGroup"] > label:hover span,
+[data-testid="stSidebar"] [data-testid="stRadioGroup"] > label:hover div {
+  color: #FFFFFF !important;
 }
 
 [data-testid="stSidebar"] [data-testid="stRadioGroup"] > label::before {
@@ -314,13 +318,17 @@ _CSS_SIDEBAR = """
 /* Menu aktif */
 [data-testid="stSidebar"] [data-testid="stRadioGroup"]
   > label:has(input:checked) {
-  background: rgba(13, 148, 136, 0.20);
+  background: rgba(13, 148, 136, 0.22);
   box-shadow: inset 3px 0 0 0 #0D9488;
 }
 
 [data-testid="stSidebar"] [data-testid="stRadioGroup"]
-  > label:has(input:checked) p {
-  color: #FFFFFF;
+  > label:has(input:checked) p,
+[data-testid="stSidebar"] [data-testid="stRadioGroup"]
+  > label:has(input:checked) span,
+[data-testid="stSidebar"] [data-testid="stRadioGroup"]
+  > label:has(input:checked) div {
+  color: #FFFFFF !important;
   font-weight: 600;
 }
 
@@ -658,20 +666,13 @@ def pasang_tema():
     st.markdown(f"<style>{CSS}</style>", unsafe_allow_html=True)
 
 
-def kepala_halaman(judul, deskripsi, langkah="", ikon=None):
+def kepala_halaman(judul, deskripsi):
     """
-    Header halaman: label langkah, judul, lalu deskripsi singkat.
+    Header halaman: judul lalu deskripsi singkat.
 
     Memakai st.header dan st.caption native agar struktur halaman tetap
     terbaca (termasuk oleh pengujian), dengan CSS yang merapikan tampilan.
     """
-    if langkah:
-        ikon_svg = svg(ikon) if ikon else ""
-        st.markdown(
-            f'<div class="ms-eyebrow">{ikon_svg}'
-            f"<span>{html.escape(langkah)}</span></div>",
-            unsafe_allow_html=True,
-        )
     st.header(judul)
     if deskripsi:
         st.caption(deskripsi)
@@ -719,15 +720,6 @@ def sidebar_status(nama_file=None):
             '<div class="ms-note-kosong">Belum ada nota yang diunggah.</div>',
             unsafe_allow_html=True,
         )
-
-
-def sidebar_footer(teks="Alur: Upload → Preprocessing → Segmentasi → "
-                        "Pengenalan → Ekstraksi → Evaluasi"):
-    """Catatan kecil di dasar sidebar."""
-    st.markdown(
-        f'<div class="ms-side-foot">{html.escape(teks)}</div>',
-        unsafe_allow_html=True,
-    )
 
 
 def alur(tahapan):
