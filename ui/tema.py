@@ -196,9 +196,10 @@ def _svg_mask(nama):
 _CSS_SIDEBAR = """
 /* ---------- Sidebar navy ---------- */
 [data-testid="stSidebar"],
-[data-testid="stSidebar"] > div:first-child,
-[data-testid="stSidebarContent"] {
-  background: #142D4E;
+[data-testid="stSidebar"] > div,
+[data-testid="stSidebarContent"],
+[data-testid="stSidebarUserContent"] {
+  background: #142D4E !important;
 }
 
 [data-testid="stSidebar"] {
@@ -273,13 +274,21 @@ _CSS_SIDEBAR = """
 }
 
 [data-testid="stSidebar"] [data-testid="stRadioGroup"]
-  > label > div:last-of-type {
+  > label > div:not(:has(p)):not(:has(span)) {
   display: none !important;
+}
+
+[data-testid="stSidebar"] [data-testid="stRadioGroup"] > label input {
+  position: absolute !important;
+  opacity: 0 !important;
+  width: 0 !important;
+  height: 0 !important;
+  pointer-events: none !important;
 }
 
 [data-testid="stSidebar"] [data-testid="stRadioGroup"] > label p,
 [data-testid="stSidebar"] [data-testid="stRadioGroup"] > label span,
-[data-testid="stSidebar"] [data-testid="stRadioGroup"] > label div {
+[data-testid="stSidebar"] [data-testid="stRadioGroup"] > label label {
   color: #E8EFF7 !important;
   font-size: 0.87rem;
   font-weight: 500;
@@ -293,7 +302,7 @@ _CSS_SIDEBAR = """
 
 [data-testid="stSidebar"] [data-testid="stRadioGroup"] > label:hover p,
 [data-testid="stSidebar"] [data-testid="stRadioGroup"] > label:hover span,
-[data-testid="stSidebar"] [data-testid="stRadioGroup"] > label:hover div {
+[data-testid="stSidebar"] [data-testid="stRadioGroup"] > label:hover label {
   color: #FFFFFF !important;
 }
 
@@ -312,6 +321,7 @@ _CSS_SIDEBAR = """
   mask-position: center;
   -webkit-mask-size: contain;
   mask-size: contain;
+  pointer-events: none;
   transition: background-color 0.15s ease;
 }
 
@@ -327,7 +337,7 @@ _CSS_SIDEBAR = """
 [data-testid="stSidebar"] [data-testid="stRadioGroup"]
   > label:has(input:checked) span,
 [data-testid="stSidebar"] [data-testid="stRadioGroup"]
-  > label:has(input:checked) div {
+  > label:has(input:checked) label {
   color: #FFFFFF !important;
   font-weight: 600;
 }
@@ -687,7 +697,7 @@ def seksi(judul, deskripsi=None):
 
 def sidebar_brand():
     """Identitas aplikasi pada bagian atas sidebar."""
-    st.markdown(
+    st.sidebar.markdown(
         '<div class="ms-brand">'
         '<div class="ms-brand-mark">MS</div>'
         "<div>"
@@ -701,7 +711,7 @@ def sidebar_brand():
 
 def sidebar_label_menu(teks="Menu"):
     """Label kecil di atas daftar menu."""
-    st.markdown(
+    st.sidebar.markdown(
         f'<div class="ms-nav-label">{html.escape(teks)}</div>',
         unsafe_allow_html=True,
     )
@@ -710,13 +720,13 @@ def sidebar_label_menu(teks="Menu"):
 def sidebar_status(nama_file=None):
     """Keterangan nota yang sedang aktif pada sidebar."""
     if nama_file:
-        st.markdown(
+        st.sidebar.markdown(
             '<div class="ms-note"><span>Nota aktif</span>'
             f"<strong>{html.escape(str(nama_file))}</strong></div>",
             unsafe_allow_html=True,
         )
     else:
-        st.markdown(
+        st.sidebar.markdown(
             '<div class="ms-note-kosong">Belum ada nota yang diunggah.</div>',
             unsafe_allow_html=True,
         )
