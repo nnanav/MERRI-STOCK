@@ -1449,10 +1449,10 @@ def halaman_business_understanding():
     with st.container(border=True):
         st.write(
             "Sistem ini bertujuan menganalisis pengaruh image preprocessing "
-            "terhadap akurasi pengenalan teks nota transaksi. Pengenalan "
+            "terhadap ketepatan pengenalan teks nota transaksi. Pengenalan "
             "karakter dilakukan dengan CNN dan Template Matching yang "
             "digabungkan dalam satu proses pengenalan karakter, lalu "
-            "akurasinya diukur menggunakan CER (Character Error Rate)."
+            "hasilnya dinilai per field pada halaman Evaluasi."
         )
         st.info(
             "Image preprocessing menjadi variabel yang dianalisis, sedangkan "
@@ -1489,9 +1489,9 @@ def halaman_business_understanding():
         ("Hasil Ekstraksi",
          "Hasil OCR diperiksa dan dikoreksi manual, lalu disimpan sebagai "
          "data transaksi beserta detail produknya."),
-        ("Evaluasi CER",
-         "Teks hasil OCR dibandingkan dengan ground truth, lalu diukur "
-         "dengan CER."),
+        ("Evaluasi",
+         "Teks hasil OCR dibandingkan dengan ground truth per field, lalu "
+         "diberi status Benar atau Salah."),
     ]
 
     for i in range(0, len(tahap), 3):

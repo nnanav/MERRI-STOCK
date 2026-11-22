@@ -129,46 +129,161 @@ def deteksi_batas_kertas(gambar):
 
 def _trim_latar(crop, maks=0.22):
     """
-    Pangkas pita latar yang masih menempel di tepi crop.
+    Pangkas latar yang masih menempel di tepi crop (dua iterasi).
 
-    Sisi crop digeser ke dalam selama pita tepinya terlihat seperti latar:
-    jauh lebih gelap dari kertas (meja abu-abu, bayangan) atau berwarna
-    pekat (strip folder). Kertas putih/terang tidak ikut terpotong.
-    Mengembalikan (crop_terpotong, (kiri, atas, kanan, bawah)).
+    Iterasi kedua perlu karena sudut kertas yang miring sering menyisakan
+    latar tipis di dua sisi setelah pemangkasan pertama.
+
+    Mengembalikan (crop_terpotong, (kiri, atas, kanan, bawah)) dengan
+    offset dihitung terhadap crop masukan.
+    """
+    h0, w0 = crop.shape[:2]
+    sisa, (kx, ky, kx2, ky2) = _trim_sekali(crop, maks)
+    if (kx, ky, kx2, ky2) == (0, 0, 0, 0):
+        return sisa, (0, 0, 0, 0)
+
+    sisa2, (jx, jy, jx2, jy2) = _trim_sekali(sisa, maks)
+    return sisa2, (kx + jx, ky + jy, kx2 + jx2, ky2 + jy2)
+
+
+def _trim_sekali(crop, maks=0.22):
+    """
+    Satu kali pemangkasan latar tepi.
+
+    Bekerja per kolom (sisi kiri/kanan) dan per baris (sisi atas/bawah),
+    bukan per pita lebar, karena latar sering hanya menutupi sebagian
+    tepi. Sebuah kolom/baris dianggap latar bila kecerahannya jelas di
+    bawah kertas (atau berwarna pekat seperti strip folder) dan bukan
+    bagian dari teks.
+
+    Pemangkasan dibatasi `maks` dari lebar/tinggi agar isi nota tidak
+    hilang. Mengembalikan (crop_terpotong, (kiri, atas, kanan, bawah)).
     """
     h, w = crop.shape[:2]
     if h < 40 or w < 40:
         return crop, (0, 0, 0, 0)
 
     hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
-    tengah = hsv[int(0.3 * h):int(0.7 * h), int(0.3 * w):int(0.7 * w)]
+    v = hsv[..., 2].astype(np.float32)
+    s = hsv[..., 1].astype(np.float32)
+
+    tengah = v[int(0.3 * h):int(0.7 * h), int(0.3 * w):int(0.7 * w)]
     if tengah.size == 0:
         return crop, (0, 0, 0, 0)
-    v_ref = float(np.median(tengah[..., 2]))
+    v_ref = float(np.median(tengah))
 
-    langkah = max(2, int(0.005 * min(h, w)))
+    # Peta tinta: piksel yang jauh lebih gelap dari kertas.
+    abu = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    tinta = (abu < 0.72 * v_ref).astype(np.uint8)
 
-    def buruk(band):
-        if band.size == 0:
+    prof_v_kol = np.median(v, axis=0)
+    prof_s_kol = np.median(s, axis=0)
+    prof_t_kol = tinta.mean(axis=0)
+
+    prof_v_bar = np.median(v, axis=1)
+    prof_s_bar = np.median(s, axis=1)
+    prof_t_bar = tinta.mean(axis=1)
+
+    def latar(vv, ss, tt):
+        # Penilaian utama memakai kecerahan: kolom/baris latar jauh lebih
+        # gelap dari kertas. Tinta hanya dipakai sebagai penjaga terakhir
+        # dengan ambang tinggi, karena bayangan tepi kertas juga terhitung
+        # sebagai piksel gelap sehingga tidak boleh memblokir pemangkasan.
+        if tt > 0.60:
             return False
-        v = float(np.median(band[..., 2]))
-        s = float(np.median(band[..., 1]))
-        return v < 0.82 * v_ref or s > 35
+        if vv < 0.96 * v_ref:
+            return True
+        return ss > 30 and vv < 0.995 * v_ref
 
-    x0 = y0 = 0
-    x1, y1 = w, h
-    while x0 < int(maks * w) and buruk(hsv[y0:y1, x0:x0 + langkah]):
-        x0 += langkah
-    while x1 > w - int(maks * w) and buruk(hsv[y0:y1, x1 - langkah:x1]):
-        x1 -= langkah
-    while y0 < int(maks * h) and buruk(hsv[y0:y0 + langkah, x0:x1]):
-        y0 += langkah
-    while y1 > h - int(maks * h) and buruk(hsv[y1 - langkah:y1, x0:x1]):
-        y1 -= langkah
+    x0, x1 = 0, w
+    while x0 < int(maks * w) and latar(
+        prof_v_kol[x0], prof_s_kol[x0], prof_t_kol[x0]
+    ):
+        x0 += 1
+    while x1 > w - int(maks * w) and latar(
+        prof_v_kol[x1 - 1], prof_s_kol[x1 - 1], prof_t_kol[x1 - 1]
+    ):
+        x1 -= 1
+
+    y0, y1 = 0, h
+    while y0 < int(maks * h) and latar(
+        prof_v_bar[y0], prof_s_bar[y0], prof_t_bar[y0]
+    ):
+        y0 += 1
+    while y1 > h - int(maks * h) and latar(
+        prof_v_bar[y1 - 1], prof_s_bar[y1 - 1], prof_t_bar[y1 - 1]
+    ):
+        y1 -= 1
+
+    # Jangan sampai hasil crop terlalu kecil.
+    if (x1 - x0) < 0.5 * w or (y1 - y0) < 0.5 * h:
+        return crop, (0, 0, 0, 0)
 
     if (x0, y0, x1, y1) == (0, 0, w, h):
         return crop, (0, 0, 0, 0)
-    return crop[y0:y1, x0:x1].copy(), (x0, y0, w - x1, h - y1)
+
+    potong = crop[y0:y1, x0:x1]
+
+    # Penjaga isi: bila pemangkasan ikut membuang tinta (teks) lebih dari
+    # 5 persen, pemangkasan dibatalkan agar isi nota tidak hilang.
+    t0 = int(np.count_nonzero(abu < 128))
+    t1 = int(np.count_nonzero(
+        cv2.cvtColor(potong, cv2.COLOR_BGR2GRAY) < 128
+    ))
+    if t0 > 0 and (t0 - t1) / t0 > 0.05:
+        return crop, (0, 0, 0, 0)
+
+    return potong.copy(), (x0, y0, w - x1, h - y1)
+
+
+def _putihkan_latar_tepi(crop, toleransi=0.93):
+    """
+    Ganti latar yang menempel di tepi crop menjadi putih.
+
+    Dipakai setelah warp perspektif, karena sudut kertas yang miring
+    membuat latar ikut terpetakan ke dalam kotak crop sebagai pita tipis
+    di tepi. Latar dikenali sebagai piksel yang jelas lebih gelap dari
+    kertas DAN tersambung ke tepi gambar, sehingga tulisan di bagian
+    tengah nota tidak pernah ikut diputihkan.
+
+    Geometri gambar tidak diubah; hanya warna latar tepi.
+    """
+    h, w = crop.shape[:2]
+    if h < 40 or w < 40:
+        return crop
+
+    abu = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    tengah = abu[int(0.3 * h):int(0.7 * h), int(0.3 * w):int(0.7 * w)]
+    if tengah.size == 0:
+        return crop
+    v_ref = float(np.median(tengah))
+    if v_ref < 40:
+        return crop
+
+    gelap = (abu < toleransi * v_ref).astype(np.uint8)
+    if not gelap.any():
+        return crop
+
+    # Beri label komponen, lalu putihkan komponen yang menyentuh tepi.
+    n, label = cv2.connectedComponents(gelap, connectivity=8)
+    if n <= 1:
+        return crop
+
+    tepi = np.concatenate([
+        label[0, :], label[-1, :], label[:, 0], label[:, -1],
+    ])
+    kandidat = set(int(x) for x in np.unique(tepi) if x != 0)
+    if not kandidat:
+        return crop
+
+    # Batasi agar tidak memutihkan hampir seluruh gambar.
+    area = np.isin(label, list(kandidat))
+    if area.mean() > 0.45:
+        return crop
+
+    hasil = crop.copy()
+    hasil[area] = (255, 255, 255)
+    return hasil
 
 
 def _kotak_dari_isi(gambar):
@@ -571,9 +686,13 @@ def preprocess_nota(gambar):
         hasil[y_min:y_max, x_min:x_max] = kertas
 
         # Gambar untuk tampilan: crop ketat yang dirapikan tepinya saja.
-        # Tidak ada piksel isi yang diubah/dihapus.
+        # Tidak ada piksel isi yang diubah/dihapus. Setelah dipangkas,
+        # sisa latar yang miring (tidak full-height) diputihkan agar tepi
+        # crop benar-benar bersih. Geometri tidak berubah, jadi pemetaan
+        # kotak field pada halaman Segmentasi tetap sama.
         crop_tampil = _trim_latar(crop_base)[0]
         tampil, trim_tampil = _trim_latar(kertas)
+        tampil = _putihkan_latar_tepi(tampil)
 
     return {
         # "asli" hanya ditampilkan (tidak diubah), jadi cukup rujuk gambar
