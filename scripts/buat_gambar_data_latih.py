@@ -139,7 +139,8 @@ def buat_gambar(kolom=8, keluar=None, judul="B. Data Latih Karakter",
       "latih"  -> persis input CNN: tinta putih di latar hitam 32x32
     """
     if keluar is None:
-        akar = "data_latih_karakter" if gaya == "terang" else "data_latih_latih"
+        akar = ("data_latih_karakter" if gaya == "terang"
+                else "data_latih_input_cnn")
         keluar = BASE / "output" / f"{akar}.png"
     keluar = Path(keluar)
     keluar.parent.mkdir(parents=True, exist_ok=True)

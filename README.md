@@ -175,6 +175,8 @@ python tests/ukur_cer.py              # evaluasi CER per field vs ground truth
 python tests/ukur_segmen_gt.py        # jumlah kotak vs jumlah karakter GT
 python tests/uji_upload.py            # cek jalur upload (decode gambar + OCR)
 python tests/uji_halaman_tidak_blank.py  # pastikan tiap halaman ada isinya
+python tests/uji_halaman_berisi.py    # pastikan tiap halaman memuat teks/judulnya
+python tests/uji_tampilan_bu.py       # cek tampilan halaman Business Understanding
 python tests/uji_ui_segmentasi.py     # cek UI Segmentasi (6 tab field)
 python tests/uji_ui_pengenalan.py     # cek UI Pengenalan Karakter (6 tab field)
 python tests/uji_ui_evaluasi.py       # cek UI Evaluasi (tanpa CER)
@@ -192,7 +194,10 @@ python tests/diag_segmen.py           # rincian segmen per field
 - Template Matching memakai seluruh gambar pada `dataset/huruf`, `dataset/angka`,
   dan `dataset/simbol`.
 - Folder `output/` berisi hasil pengujian dan gambar data latih; isinya dibuat
-  ulang saat program dijalankan sehingga aman dihapus.
+  ulang saat program dijalankan sehingga aman dihapus. Satu pengecualian:
+  `output/laporan_dataset/hasil_validasi.csv` dibaca halaman **Info Dataset**
+  sebagai daftar berkas bermasalah, jadi berkas itu ikut terhapus hanya bila
+  siap dibuat ulang dengan `python scripts/validasi_dataset.py`.
 - `database/transaksi.db` berisi data transaksi yang sudah dikonfirmasi pengguna.
   Berkas ini **bukan** hasil sementara: jangan dihapus saat membersihkan
   `output/`. Folder `database/` diabaikan Git agar data nota tidak ikut terunggah.
