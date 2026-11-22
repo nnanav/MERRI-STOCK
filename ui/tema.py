@@ -258,93 +258,70 @@ _CSS_SIDEBAR = """
   margin: 0.1rem 0 0.4rem 0.35rem;
 }
 
-/* Radio diubah menjadi daftar navigasi.
-   Struktur DOM (baseweb): label > div(teks) > input > div(mark radio).
-   Yang disembunyikan adalah MARK (div terakhir), teks tetap tampil. */
-[data-testid="stSidebar"] [data-testid="stRadioGroup"] { gap: 2px; }
+/* Navigasi sidebar.
+   Pendekatan dibuat sederhana dan tahan versi: elemen internal radio
+   TIDAK disembunyikan (dulu ini yang membuat teks hilang), hanya
+   diwarnai ulang agar kontras di atas latar navy.
+   Selector memakai tiga bentuk (class .stRadio, stRadio, stRadioGroup)
+   agar tetap kena walau struktur internal Streamlit berubah. */
+[data-testid="stSidebar"] .stRadio [role="radiogroup"],
+[data-testid="stSidebar"] [data-testid="stRadioGroup"] {
+  gap: 2px;
+}
 
+[data-testid="stSidebar"] .stRadio [role="radiogroup"] > label,
 [data-testid="stSidebar"] [data-testid="stRadioGroup"] > label {
   width: 100%;
-  padding: 9px 12px 9px 40px !important;
+  padding: 8px 10px !important;
   margin: 0 0 2px 0 !important;
   border-radius: 9px;
-  position: relative;
   cursor: pointer;
+  background: transparent !important;
   transition: background 0.15s ease;
 }
 
-[data-testid="stSidebar"] [data-testid="stRadioGroup"]
-  > label > div:not(:has(p)):not(:has(span)) {
-  display: none !important;
-}
-
-[data-testid="stSidebar"] [data-testid="stRadioGroup"] > label input {
-  position: absolute !important;
-  opacity: 0 !important;
-  width: 0 !important;
-  height: 0 !important;
-  pointer-events: none !important;
-}
-
-[data-testid="stSidebar"] [data-testid="stRadioGroup"] > label p,
-[data-testid="stSidebar"] [data-testid="stRadioGroup"] > label span,
-[data-testid="stSidebar"] [data-testid="stRadioGroup"] > label label {
-  color: #E8EFF7 !important;
-  font-size: 0.87rem;
-  font-weight: 500;
-  margin: 0;
-  line-height: 1.35;
-}
-
+[data-testid="stSidebar"] .stRadio [role="radiogroup"] > label:hover,
 [data-testid="stSidebar"] [data-testid="stRadioGroup"] > label:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.09) !important;
 }
 
-[data-testid="stSidebar"] [data-testid="stRadioGroup"] > label:hover p,
-[data-testid="stSidebar"] [data-testid="stRadioGroup"] > label:hover span,
-[data-testid="stSidebar"] [data-testid="stRadioGroup"] > label:hover label {
+/* Semua teks menu dipaksa putih, apa pun elemen pembungkusnya */
+[data-testid="stSidebar"] .stRadio [role="radiogroup"] > label *,
+[data-testid="stSidebar"] [data-testid="stRadioGroup"] > label * {
   color: #FFFFFF !important;
+  -webkit-text-fill-color: #FFFFFF !important;
+  background: transparent !important;
+  box-shadow: none !important;
 }
 
-[data-testid="stSidebar"] [data-testid="stRadioGroup"] > label::before {
-  content: "";
-  position: absolute;
-  left: 13px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 16px;
-  height: 16px;
-  background-color: #8FA6BF;
-  -webkit-mask-repeat: no-repeat;
-  mask-repeat: no-repeat;
-  -webkit-mask-position: center;
-  mask-position: center;
-  -webkit-mask-size: contain;
-  mask-size: contain;
-  pointer-events: none;
-  transition: background-color 0.15s ease;
+[data-testid="stSidebar"] .stRadio [role="radiogroup"] > label p,
+[data-testid="stSidebar"] [data-testid="stRadioGroup"] > label p {
+  font-size: 0.88rem;
+  font-weight: 500;
+  line-height: 1.4;
+  margin: 0;
 }
 
-/* Menu aktif */
+/* Menu aktif: baris teal + teks putih tebal */
+[data-testid="stSidebar"] .stRadio [role="radiogroup"]
+  > label:has(input:checked),
 [data-testid="stSidebar"] [data-testid="stRadioGroup"]
   > label:has(input:checked) {
-  background: rgba(13, 148, 136, 0.22);
-  box-shadow: inset 3px 0 0 0 #0D9488;
+  background: rgba(13, 148, 136, 0.28) !important;
+  box-shadow: inset 3px 0 0 0 #0D9488 !important;
 }
 
-[data-testid="stSidebar"] [data-testid="stRadioGroup"]
+[data-testid="stSidebar"] .stRadio [role="radiogroup"]
   > label:has(input:checked) p,
 [data-testid="stSidebar"] [data-testid="stRadioGroup"]
-  > label:has(input:checked) span,
-[data-testid="stSidebar"] [data-testid="stRadioGroup"]
-  > label:has(input:checked) label {
-  color: #FFFFFF !important;
-  font-weight: 600;
+  > label:has(input:checked) p {
+  font-weight: 700;
 }
 
-[data-testid="stSidebar"] [data-testid="stRadioGroup"]
-  > label:has(input:checked)::before {
-  background-color: #2DD4BF;
+/* Warna sorotan teks (klik-drag) dibuat teal, bukan biru bawaan */
+[data-testid="stSidebar"] ::selection {
+  background: rgba(13, 148, 136, 0.55) !important;
+  color: #FFFFFF !important;
 }
 
 /* Nota aktif */
@@ -668,7 +645,7 @@ CSS_KOMPONEN = """
 
 
 
-CSS = CSS_DASAR + _CSS_SIDEBAR + _aturan_ikon_nav() + CSS_KOMPONEN
+CSS = CSS_DASAR + _CSS_SIDEBAR + CSS_KOMPONEN
 
 
 def pasang_tema():
