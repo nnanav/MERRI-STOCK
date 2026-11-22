@@ -266,6 +266,195 @@ def gabung_segmen(hasil_segmen, ambang_cnn=AMBANG_CNN, ambang_tm=AMBANG_TM):
     return hasil_final, detail
 
 
+# ==========================================
+# PASCA-PROSES TEKS BERDASARKAN JENIS FIELD
+# ==========================================
+
+# Field yang isinya selalu angka pada nota CV Merriena: jumlah barang dan
+# harga satuan. Nilainya hanya berisi digit serta pemisah "." dan ",".
+JENIS_NUMERIK = ("harga", "jumlah")
+
+# Huruf yang bentuknya sangat mirip angka. Dipakai HANYA pada field
+# numerik, karena di sana huruf tidak mungkin muncul sehingga huruf
+# tersebut pasti salah baca angka.
+_MIRIP_ANGKA = {
+    "O": "0", "o": "0", "Q": "0", "D": "0", "U": "0",
+    "I": "1", "l": "1", "i": "1", "j": "1", "L": "1", "|": "1",
+    "S": "5", "s": "5",
+    "B": "8",
+    "Z": "2", "z": "2",
+    "G": "6",
+    "T": "7",
+    "A": "4",
+    "g": "9", "q": "9",
+}
+
+# Huruf kecil yang mudah tertukar dengan huruf besar pada teks nota.
+_HURUF_KONFUSABLE = {"l", "i"}
+
+
+def bersihkan_numerik(teks):
+    """
+    Rapikan teks field numerik (jumlah, harga satuan).
+
+    Hanya digit dan pemisah "." / "," yang dipertahankan. Huruf yang
+    bentuknya mirip angka diubah ke angka (mis. "1Sx8" -> "15x8",
+    "lO.5S0" -> "10.550"), sedangkan karakter lain dibuang karena pada
+    field ini tidak mungkin muncul.
+    """
+    if not teks:
+        return teks
+
+    keluar = []
+    for c in str(teks):
+        if c.isdigit() or c in ".,":
+            keluar.append(c)
+        elif c in _MIRIP_ANGKA:
+            keluar.append(_MIRIP_ANGKA[c])
+
+    hasil = "".join(keluar).strip(".,")
+
+    # Pemisah ganda berurutan (mis. ".." atau ",.") tidak wajar.
+    while ".." in hasil or ",," in hasil or ".," in hasil or ",." in hasil:
+        hasil = (hasil.replace("..", ".").replace(",,", ",")
+                 .replace(".,", ".").replace(",.", ","))
+    return hasil
+
+
+def rapikan_huruf(teks):
+    """
+    Perbaiki huruf besar/kecil yang mudah tertukar pada teks nota.
+
+    Dua kesalahan yang paling sering muncul karena setiap karakter
+    dinormalkan ke kanvas 32x32 sehingga ukuran aslinya hilang:
+
+    1. Huruf 'I' terbaca 'l' pada kata berhuruf besar semua
+       (mis. "PSSI" menjadi "PSSl", "IKN" menjadi "lKN").
+       Bila satu kata hanya memuat huruf kecil 'l'/'i' di antara huruf
+       besar, huruf kecil itu dikembalikan menjadi 'I'.
+
+    2. Huruf 'l' terbaca 'I' di tengah kata berhuruf campuran
+       (mis. "Lantal" menjadi "LantaI"). Bila kata memuat huruf kecil
+       lain, 'I' yang bukan huruf pertama kata dikembalikan menjadi 'l'.
+
+    Kata yang seluruhnya huruf besar (mis. "KSO", "PSSI") dan kata yang
+    wajar berhuruf besar di awal (mis. "Indra") tidak diubah.
+    """
+    if not teks:
+        return teks
+
+    import re
+
+    def perbaiki(kata):
+        huruf = [c for c in kata if c.isalpha()]
+        if len(huruf) < 2:
+            return kata
+
+        kecil = [c for c in huruf if c.islower()]
+
+        # (1) Kata huruf besar yang hanya memuat 'l'/'i' kecil.
+        if kecil and all(c in _HURUF_KONFUSABLE for c in kecil):
+            return kata.replace("l", "I").replace("i", "I")
+
+        # (2) Kata campuran: 'I' di tengah kata hampir pasti 'l'.
+        if kecil and len(kata) > 1:
+            depan = kata[0]
+            sisa = kata[1:].replace("I", "l")
+            return depan + sisa
+
+        return kata
+
+    bagian = re.split(r"(\s+)", str(teks))
+    return "".join(
+        b if not b.strip() else perbaiki(b) for b in bagian
+    )
+
+
+# Huruf yang dipakai pada aturan "menempel pada digit". Hanya huruf yang
+# bentuknya hampir sama dengan angka DAN hampir tidak mungkin menjadi
+# bagian kode produk. Huruf seperti L, T, A, U sengaja TIDAK dipakai di
+# sini karena sering muncul wajar berdampingan dengan angka
+# (mis. "PAMA L4", "K-300", "PU 50x30").
+_MIRIP_ANGKA_MENEMPEL = {
+    "O": "0", "o": "0", "Q": "0", "D": "0",
+    "I": "1", "l": "1", "i": "1", "|": "1",
+    "S": "5", "s": "5",
+    "B": "8",
+    "Z": "2", "z": "2",
+    "G": "6",
+}
+
+
+def rapikan_angka_menempel(teks):
+    """
+    Ubah huruf mirip angka yang MENEMPEL pada angka menjadi angka.
+
+    Pada nama produk sering muncul ukuran seperti "40x30x15x8". Huruf
+    'S' pada "1Sx8" hampir pasti angka 5, karena berdampingan langsung
+    dengan digit. Sebaliknya huruf berdiri sendiri (mis. "Konstein S
+    40x30...") atau bagian kode produk (mis. "PAMA L4", "K-300") TIDAK
+    diubah.
+
+    Hanya berlaku bila huruf tersebut bersebelahan langsung (tanpa spasi)
+    dengan sebuah digit.
+    """
+    if not teks:
+        return teks
+
+    teks = str(teks)
+    keluar = []
+    for i, c in enumerate(teks):
+        if c in _MIRIP_ANGKA_MENEMPEL:
+            kiri = teks[i - 1] if i > 0 else ""
+            kanan = teks[i + 1] if i + 1 < len(teks) else ""
+            if kiri.isdigit() or kanan.isdigit():
+                keluar.append(_MIRIP_ANGKA_MENEMPEL[c])
+                continue
+        keluar.append(c)
+    return "".join(keluar)
+
+
+def rapikan_kali(teks):
+    """
+    Perbaiki tanda kali pada ukuran produk yang terbaca sebagai huruf.
+
+    Nama produk memuat ukuran seperti "50x30x18x13". Huruf 'x' sempit
+    dan sering dikenali 'K' (mis. "18K13"), sehingga ukuran menjadi
+    tidak terbaca. Pada field produk, satu huruf yang diapit dua digit
+    selalu tanda kali, bukan huruf.
+
+    Penggantian dibatasi pada huruf yang bentuknya mirip 'x' agar kode
+    produk lain (mis. "K-300") tidak ikut berubah.
+    """
+    if not teks:
+        return teks
+
+    import re
+
+    mirip_kali = "KkXxYyVvHhNnMmWw*×"
+    pola = r"(?<=\d)([" + re.escape(mirip_kali) + r"])(?=\d)"
+    return re.sub(pola, "x", str(teks))
+
+
+def rapikan_teks(teks, jenis=None):
+    """
+    Terapkan pasca-proses yang sesuai jenis field.
+
+    Field numerik (jumlah, harga satuan) dibersihkan menjadi angka;
+    field teks (nomor, penerima, proyek, produk) diperbaiki huruf
+    besar/kecilnya dan huruf mirip angka yang menempel pada digit.
+    Nama produk juga diperbaiki tanda kalinya. Model CNN, Template
+    Matching, dan segmentasi tidak diubah.
+    """
+    if jenis in JENIS_NUMERIK:
+        return bersihkan_numerik(teks)
+    if jenis == "produk":
+        return rapikan_huruf(rapikan_angka_menempel(rapikan_kali(teks)))
+    if jenis in ("nomor", "penerima", "proyek"):
+        return rapikan_huruf(rapikan_angka_menempel(teks))
+    return teks
+
+
 if __name__ == "__main__":
 
     if len(sys.argv) < 2:

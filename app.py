@@ -225,15 +225,28 @@ def buang_tanda_kali(hasil):
 
 def rapikan_satuan(teks):
     """
-    Buang tanda kali di akhir satuan.
+    Rapikan hasil OCR kolom satuan.
 
-    Pada nota, kolom satuan diikuti tanda kali, sehingga hasil OCR sering
-    menjadi "Pcs x" padahal isi satuannya hanya "Pcs".
+    Dua koreksi:
+    1. Tanda kali di akhir dibuang. Pada nota, kolom satuan diikuti tanda
+       kali, sehingga hasil OCR sering menjadi "Pcs x" padahal isinya
+       hanya "Pcs".
+    2. Penulisan diseragamkan menjadi huruf besar di awal saja
+       ("PCS" atau "PcS" menjadi "Pcs"), karena satuan ditulis begitu
+       pada nota. Token yang memuat angka (mis. "M3") tidak diubah.
     """
     if not teks:
         return teks
     import re
     teks = re.sub(r"[\s.,]*[xX×\*]+\s*$", "", teks)
+
+    def seragam(token):
+        if token.isalpha() and len(token) <= 6:
+            return token[0].upper() + token[1:].lower()
+        return token
+
+    bagian = re.split(r"(\s+)", teks)
+    teks = "".join(b if not b.strip() else seragam(b) for b in bagian)
     return teks.strip()
 
 
@@ -289,7 +302,7 @@ def kenali_crop(crop, pakai_clahe=False, jenis=None):
     tinggi = [s["y2"] - s["y1"] for s in hasil]
     ta = float(np.median(tinggi)) if tinggi else 12.0
     hasil_final, detail = gabung_segmen(hasil)
-    teks = bersihkan_tepi(susun_teks(hasil_final, "final", ta))
+    teks = bersihkan_tepi(susun_teks(hasil_final, "final", ta, jenis))
     if jenis == "satuan":
         teks = rapikan_satuan(teks)
     return {
@@ -574,7 +587,7 @@ def segmen_field(crop, jenis=None):
         final, detail = gabung_segmen(hasil)
         tinggi = [s["y2"] - s["y1"] for s in hasil]
         ta = float(np.median(tinggi)) if tinggi else 12.0
-        teks = susun_teks(final, "final", ta) if final else ""
+        teks = susun_teks(final, "final", ta, jenis) if final else ""
         if jenis == "satuan":
             teks = rapikan_satuan(teks)
 

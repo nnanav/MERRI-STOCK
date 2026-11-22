@@ -611,6 +611,75 @@ def _rapikan_gabung_pecah(hasil, biner, tinggi_acuan,
         i += 1
     hasil = gabung
 
+    # ---------- (A2) GABUNG PASANGAN YANG TERBUKTI TERPECAH ----------
+    # Satu huruf 'm' dapat terbelah DP menjadi dua busur yang dikenali
+    # 'r' + 'n', sehingga "Cm" terbaca "Crn".
+    #
+    # Penggabungan dibatasi pada pola yang sudah diverifikasi dari data:
+    # HANYA pasangan 'r' + 'n' yang berubah menjadi 'm'. Penggabungan
+    # umum berdasarkan keyakinan model TIDAK dipakai, karena pengujian
+    # menunjukkan potongan dua karakter sah (mis. 'r'+'e', 't'+'u')
+    # justru dikenali 'm' dengan keyakinan tinggi sehingga akan merusak
+    # teks yang sudah benar.
+    pasangan_terpecah = {("r", "n"): "m"}
+
+    kandidat2 = {}
+    for i in range(len(hasil) - 1):
+        cur, nxt = hasil[i], hasil[i + 1]
+        kunci = (cur.get("cnn"), nxt.get("cnn"))
+        target = pasangan_terpecah.get(kunci)
+        if target is None:
+            continue
+
+        w_cur = cur["x2"] - cur["x1"]
+        w_nxt = nxt["x2"] - nxt["x1"]
+        celah = nxt["x1"] - cur["x2"]
+        lebar_gabung = w_cur + w_nxt + celah
+        if not (
+            celah <= 0
+            and w_cur <= 0.75 * ta
+            and w_nxt <= 0.75 * ta
+            and 0.55 * ta <= lebar_gabung <= 1.30 * ta
+        ):
+            continue
+
+        y1 = min(cur["y1"], nxt["y1"])
+        y2 = max(cur["y2"], nxt["y2"])
+        pot = ambil(cur["x1"], y1, nxt["x2"], y2)
+        if pot is not None:
+            kandidat2[i] = (y1, y2, pot, target)
+
+    if kandidat2:
+        indeks2 = sorted(kandidat2)
+        pred2 = _prediksi_banyak(
+            [kandidat2[i][2] for i in indeks2],
+            model, labels, templates, label_tm,
+        )
+        hasil2 = dict(zip(indeks2, pred2))
+
+        gabung2 = []
+        i = 0
+        while i < len(hasil):
+            cur = dict(hasil[i])
+            m = hasil2.get(i)
+            if m is not None:
+                c, t, pc, pt = m
+                target = kandidat2[i][3]
+                if pc >= 0.85 and c == target:
+                    y1, y2, _, _ = kandidat2[i]
+                    cur = {
+                        "x1": cur["x1"], "y1": y1,
+                        "x2": hasil[i + 1]["x2"], "y2": y2,
+                        "cnn": c, "tm": t, "pc": pc, "pt": pt,
+                        "status": "KANDIDAT",
+                    }
+                    gabung2.append(cur)
+                    i += 2
+                    continue
+            gabung2.append(cur)
+            i += 1
+        hasil = gabung2
+
     sempit_mustahil = {
         ".", ",", "'", '"', "`", ":", ";", "!", "|",
         "i", "l", "1", "I", "j", "-", "~", "_",
@@ -1110,6 +1179,34 @@ def rapikan_segmen(hasil, tinggi_acuan):
 
     hasil = sorted(hasil, key=lambda z: z["x1"])
 
+    # Buang segmen yang seluruhnya berada di dalam segmen lain. Hal ini
+    # terjadi ketika pemecahan lebar menghasilkan kotak yang bertumpuk
+    # (mis. tanda '-' ganda pada garis harga), dan membuat karakter
+    # tercetak dua kali pada teks akhir.
+    bersih = []
+    for item in hasil:
+        tumpuk = False
+        for lain in hasil:
+            if lain is item:
+                continue
+            dalam = (
+                lain["x1"] <= item["x1"]
+                and lain["x2"] >= item["x2"]
+                and lain["y1"] <= item["y1"]
+                and lain["y2"] >= item["y2"]
+            )
+            lebih_kecil = (
+                (lain["x2"] - lain["x1"]) * (lain["y2"] - lain["y1"])
+                > (item["x2"] - item["x1"]) * (item["y2"] - item["y1"])
+            )
+            if dalam and lebih_kecil:
+                tumpuk = True
+                break
+        if not tumpuk:
+            bersih.append(item)
+    if bersih:
+        hasil = bersih
+
     buang = {":", "=", "~", "_", "|"}
 
     # Tanda yang memang kecil secara wajar, jadi tidak boleh dibuang
@@ -1198,7 +1295,8 @@ def gabung_segmen_menempel(hasil, biner, tinggi_acuan,
 def susun_teks(
     hasil,
     metode,
-    tinggi_acuan
+    tinggi_acuan,
+    jenis=None
 ):
     teks = ""
     akhir = None
@@ -1231,24 +1329,56 @@ def susun_teks(
     kar_med = float(np.median(lebar_kar)) if lebar_kar else 0.55 * tinggi_acuan
 
     ambang_celah = (
-        max(0.22 * tinggi_acuan,
-            float(np.median(celah)) + 0.25 * tinggi_acuan)
-        if celah else 0.30 * tinggi_acuan
+        max(0.16 * tinggi_acuan,
+            float(np.median(celah)) + 0.07 * tinggi_acuan)
+        if celah else 0.22 * tinggi_acuan
     )
-    ambang_lebar = max(0.28 * tinggi_acuan, 0.45 * kar_med)
+    ambang_lebar = max(0.20 * tinggi_acuan, 0.35 * kar_med)
 
     ambang_spasi = min(ambang_celah, ambang_lebar)
 
     for i, item in enumerate(hasil):
         if i > 0:
             gap = item["x1"] - hasil[i - 1]["x2"]
-            if gap > ambang_spasi:
+            sebelum = _label_segmen(hasil[i - 1], metode, tinggi_acuan, jenis)
+            kini = _label_segmen(item, metode, tinggi_acuan, jenis)
+            # Jangan menyisipkan spasi di dalam satu angka: "40x20x10"
+            # tidak pernah ditulis terpisah pada nota.
+            dalam_angka = sebelum.isdigit() and kini.isdigit()
+            if gap > ambang_spasi and not dalam_angka:
                 teks += " "
 
-        teks += item[metode]
+        teks += _label_segmen(item, metode, tinggi_acuan, jenis)
         akhir = max(item["x2"], akhir or 0)
 
-    return teks
+    from processing.pengenalan_karakter import rapikan_teks
+    return rapikan_teks(teks, jenis)
+
+
+def _label_segmen(item, metode, tinggi_acuan, jenis):
+    """
+    Ambil label satu segmen, dengan satu koreksi khusus field numerik.
+
+    Pada field angka (jumlah, harga satuan), segmen yang sangat sempit
+    hampir selalu pemisah ribuan/desimal yang bentuknya rusak akibat
+    pembesaran 3x, bukan huruf. Contoh nyata: titik pada "200.000"
+    dikenali 'a' dengan lebar 0,18 x tinggi huruf. Segmen seperti itu
+    dikembalikan menjadi '.' supaya angka tetap terbaca benar.
+
+    Huruf yang mirip angka (mis. 'l' atau 'O') TIDAK diubah di sini,
+    karena bisa jadi itu angka 1 atau 0 yang memang sempit; huruf
+    seperti itu ditangani oleh pemetaan angka di rapikan_teks().
+    """
+    label = item.get(metode) or ""
+    if jenis not in ("harga", "jumlah"):
+        return label
+
+    lebar = max(0, item.get("x2", 0) - item.get("x1", 0))
+    sempit = lebar < 0.25 * max(1.0, tinggi_acuan)
+    mirip_angka = set("OoQDU IlijL|SsBZzGTAgq".replace(" ", ""))
+    if sempit and label and label not in ".," and label not in mirip_angka:
+        return "."
+    return label
 
 
 # =========================================

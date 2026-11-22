@@ -11,6 +11,7 @@ sys.path.insert(0, str(BASE))
 
 import app  # noqa: E402
 from processing.pemrosesan_field import baca_gambar  # noqa: E402
+from processing.ground_truth import gt_field  # noqa: E402
 
 # 1. Decode gambar valid (meniru st.file_uploader -> np.frombuffer -> imdecode)
 path = BASE / "data_uji" / "nota_26.jpeg"
@@ -44,7 +45,7 @@ print(f"4. OCR field ok   : {n_ok}/{len(det['fields'])}")
 assert n_ok >= 1
 
 # 5. Ground truth untuk nota ini tetap bisa dievaluasi
-gt = app.gt_field("nota_26.jpeg", "nomor")
+gt = gt_field("nota_26.jpeg", "nomor")
 r = app.hitung_cer_rinci(gt, "0099")
 print(f"5. CER nomor      : {r['cer']*100:.2f}% (GT={gt!r})")
 assert r["cer"] == 0.0
