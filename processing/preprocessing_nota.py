@@ -355,9 +355,21 @@ def crop_dan_luruskan(gambar):
             x_min = max(0, kiri - 2)
         else:
             x_min = 0
-        y_min = 0
-        x_max = lebar
-        y_max = tinggi
+
+        # Sisi lain mengikuti batas kertas yang terdeteksi (kotak), bukan
+        # seluruh tinggi/lebar foto. Sebelumnya y_max dipaksa sama dengan
+        # tinggi gambar, sehingga pita latar di bawah kertas ikut masuk dan
+        # hasil crop tampak melenceng ke atas.
+        y_min = int(max(0, np.floor(kotak[:, 1].min())))
+        y_max = int(min(tinggi, np.ceil(kotak[:, 1].max())))
+        x_max = int(min(lebar, np.ceil(kotak[:, 0].max())))
+
+        # Jaga agar hasil crop tetap wajar; bila batas kertas terlalu kecil,
+        # pakai seluruh tinggi/lebar gambar seperti sebelumnya.
+        if (x_max - x_min) < 0.30 * lebar:
+            x_min, x_max = 0, lebar
+        if (y_max - y_min) < 0.30 * tinggi:
+            y_min, y_max = 0, tinggi
 
         kanvas = gambar.copy()
 
@@ -368,8 +380,8 @@ def crop_dan_luruskan(gambar):
             "kotak": kotak,
             "status": "crop_saja",
             "pesan": (
-                "Kertas dan latar sama-sama putih; crop dimulai dari garis "
-                "tepi kertas yang terdeteksi di sisi kiri."
+                "Kertas dan latar sama-sama putih; crop mengikuti garis tepi "
+                "kertas yang terdeteksi."
             ),
         }
 
