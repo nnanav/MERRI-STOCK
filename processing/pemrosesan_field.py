@@ -66,6 +66,9 @@ def isolasi_nomor(kecil):
     komp = [k for k in komp if k[3] >= 6]
 
     if not komp:
+        cadangan = _cadangan_nomor(kecil)
+        if cadangan is not None:
+            return cadangan
         return {
             "status": "tidak_ada_merah",
             "pesan": "Tidak ada teks merah 'NO : xxxx' di area atas-kanan.",
@@ -91,7 +94,11 @@ def isolasi_nomor(kecil):
 
     crop_baris = kecil[Y1:Y2, X1:X2].copy()
 
-    digit, pesan, mask_digit = _potong_digit(crop_baris)
+    digit, pesan, mask_digit, kotak_digit = _potong_digit(crop_baris)
+    if digit is None or digit.shape[1] < 1.6 * digit.shape[0]:
+        cadangan = _cadangan_nomor(kecil)
+        if cadangan is not None:
+            return cadangan
 
     if digit is None:
         return {
@@ -104,10 +111,12 @@ def isolasi_nomor(kecil):
             "mask_digit": mask_digit,
         }
 
+    dx1, dy1, dx2, dy2 = kotak_digit
     return {
         "status": "ok",
         "pesan": pesan,
         "bbox": (X1, Y1, X2, Y2),
+        "bbox_digit": (X1 + dx1, Y1 + dy1, X1 + dx2, Y1 + dy2),
         "crop_baris": crop_baris,
         "crop_digit": digit,
         "mask": merah,
@@ -115,7 +124,53 @@ def isolasi_nomor(kecil):
     }
 
 
-def _potong_digit(crop_baris):
+def _mask_merah_longgar(gambar):
+    hsv = cv2.cvtColor(gambar, cv2.COLOR_BGR2HSV)
+    rona = cv2.bitwise_or(
+        cv2.inRange(hsv, (0, 38, 42), (17, 255, 255)),
+        cv2.inRange(hsv, (145, 38, 42), (179, 255, 255)),
+    )
+    biru, hijau, merah = cv2.split(gambar.astype(np.int16))
+    dominan = (merah - np.maximum(biru, hijau) >= 17).astype(np.uint8) * 255
+    return cv2.bitwise_and(rona, dominan)
+
+
+def _cadangan_nomor(gambar):
+    """Coba baris merah lain di header bila baris teratas gagal divalidasi."""
+    tinggi, lebar = gambar.shape[:2]
+    zona = np.zeros(gambar.shape[:2], np.uint8)
+    zona[:round(0.24 * tinggi), round(0.60 * lebar):] = 255
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (17, 3))
+    for buat_mask in (mask_merah, _mask_merah_longgar):
+        merah = cv2.bitwise_and(buat_mask(gambar), zona)
+        gabung = cv2.morphologyEx(merah, cv2.MORPH_CLOSE, kernel)
+        komponen = [k for k in _komponen(gabung, min_area=45) if k[3] >= 5]
+        for x, y, w, h, _ in sorted(komponen, key=lambda k: (-k[2] * k[3], k[1])):
+            baris = [
+                k for k in komponen
+                if abs(k[1] + k[3] / 2 - (y + h / 2)) <= max(4, 0.46 * h)
+                and k[0] <= x + w + 1.5 * h
+                and k[0] + k[2] >= x - 1.5 * h
+            ]
+            x1 = max(0, min(k[0] for k in baris) - 6)
+            x2 = min(lebar, max(k[0] + k[2] for k in baris) + 6)
+            y1 = max(0, min(k[1] for k in baris) - 5)
+            y2 = min(tinggi, max(k[1] + k[3] for k in baris) + 5)
+            crop = gambar[y1:y2, x1:x2].copy()
+            digit, pesan, mask_digit, bbox = _potong_digit(crop, buat_mask)
+            if digit is None or not 1.65 < digit.shape[1] / digit.shape[0] < 5.5:
+                continue
+            a, b, c, d = bbox
+            return {
+                "status": "ok", "pesan": pesan, "mask": merah,
+                "bbox": (x1, y1, x2, y2),
+                "bbox_digit": (x1 + a, y1 + b, x1 + c, y1 + d),
+                "crop_baris": crop, "crop_digit": digit, "mask_digit": mask_digit,
+            }
+    return None
+
+
+def _potong_digit(crop_baris, buat_mask=mask_merah):
     """
     Buang awalan 'NO' dan titik dua, sisakan hanya bagian digit.
 
@@ -123,23 +178,23 @@ def _potong_digit(crop_baris):
     di antara huruf dan digit. Digit boleh menyatu, jadi kita hanya
     menentukan batas kiri; pemecahan digit dilakukan tahap segmentasi.
     """
-    merah = mask_merah(crop_baris)
+    merah = buat_mask(crop_baris)
 
     if cv2.countNonZero(merah) == 0:
-        return None, "Mask merah kosong pada crop baris nomor.", merah
+        return None, "Mask merah kosong pada crop baris nomor.", merah, None
 
     komp = _komponen(merah, min_area=12)
     komp = [k for k in komp if k[3] >= 4]
 
     if len(komp) < 2:
-        return None, "Komponen digit tidak cukup untuk dipisah.", merah
+        return None, "Komponen digit tidak cukup untuk dipisah.", merah, None
 
     komp.sort(key=lambda z: z[0])
     h_max = max(k[3] for k in komp)
     h_besar = [k for k in komp if k[3] >= 0.5 * h_max]
 
     if len(h_besar) < 3:
-        return None, "Digit tidak terdeteksi (komponen tinggi kurang).", merah
+        return None, "Digit tidak terdeteksi (komponen tinggi kurang).", merah, None
 
     # Titik dua: komponen rendah di antara huruf (kiri) dan digit (kanan).
     x_huruf = h_besar[1][0] + h_besar[1][2]
@@ -163,7 +218,7 @@ def _potong_digit(crop_baris):
     digit_warna = crop_baris[:, x_mulai:].copy()
 
     # Rapatkan ke bingkai tinta merah.
-    m = mask_merah(digit_warna)
+    m = buat_mask(digit_warna)
 
     # Buang tanda baca/awalan di depan digit dengan memulai dari
     # komponen setinggi digit yang pertama. Digit nol di depan tetap
@@ -177,17 +232,18 @@ def _potong_digit(crop_baris):
             # (sempit) tersaring walau tingginya menempel.
             if k[3] >= 0.55 * hmax_d and k[2] >= 0.30 * hmax_d:
                 if k[0] > 0:
+                    x_mulai += k[0]
                     digit_warna = digit_warna[:, k[0]:]
                     m = m[:, k[0]:]
                 break
 
     nz = cv2.findNonZero(m)
     if nz is None:
-        return None, "Bagian digit kosong setelah pemotongan.", m
+        return None, "Bagian digit kosong setelah pemotongan.", m, None
 
     x, y, w, h = cv2.boundingRect(nz)
     if w < 6 or h < 6:
-        return None, "Bagian digit terlalu kecil.", m
+        return None, "Bagian digit terlalu kecil.", m, None
 
     digit_warna = digit_warna[y:y + h, x:x + w].copy()
     m = m[y:y + h, x:x + w]
@@ -196,7 +252,7 @@ def _potong_digit(crop_baris):
     n_digit = len([k for k in _komponen(m, min_area=10)])
     pesan = f"Digit diisolasi ({metode}); komponen tinta merah: {n_digit}."
 
-    return digit_warna, pesan, m
+    return digit_warna, pesan, m, (x_mulai + x, y, x_mulai + x + w, y + h)
 
 
 def bersihkan_minus(crop):
@@ -289,13 +345,16 @@ def bersihkan_minus(crop):
         hasil, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
     )[1]
     nz = cv2.findNonZero(sisa)
+    bbox_crop = (0, 0, w, h)
     if nz is not None:
         x, y, ww, hh = cv2.boundingRect(nz)
         if ww > 3 and hh > 3:
             hasil = hasil[y:y + hh, x:x + ww].copy()
+            bbox_crop = (x, y, x + ww, y + hh)
 
     return {
         "crop": hasil,
+        "bbox_crop": bbox_crop,
         "dihapus": True,
         "pesan": "Minus pembuka dihapus sebelum segmentasi.",
     }
@@ -306,11 +365,11 @@ def _rapatkan(img):
     bb = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
     nz = cv2.findNonZero(bb)
     if nz is None:
-        return None
+        return None, None
     x, y, ww, hh = cv2.boundingRect(nz)
     if ww < 3 or hh < 3:
-        return None
-    return img[y:y + hh, x:x + ww].copy()
+        return None, None
+    return img[y:y + hh, x:x + ww].copy(), (x, y, x + ww, y + hh)
 
 
 def pisah_jumlah_satuan(crop):
@@ -338,6 +397,19 @@ def pisah_jumlah_satuan(crop):
     biner = cv2.threshold(
         abu, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
     )[1]
+
+    # Garis tabel di tepi bawah dapat menyambungkan jumlah dan satuan
+    # dalam proyeksi kolom. Potong hanya bila garis panjang menyentuh tepi.
+    garis = cv2.morphologyEx(
+        biner, cv2.MORPH_OPEN, np.ones((1, max(17, round(0.74 * w))), np.uint8),
+    )
+    baris_garis = np.flatnonzero(np.count_nonzero(garis, axis=1) > 0.72 * w)
+    if baris_garis.size and baris_garis[0] > 0.60 * h and baris_garis[-1] >= h - 4:
+        batas = baris_garis[0]
+        crop = crop[:batas]
+        biner = cv2.threshold(
+            abu[:batas], 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU,
+        )[1]
 
     proyeksi = np.count_nonzero(biner, axis=0)
     ada_tinta = proyeksi > 0
@@ -381,8 +453,8 @@ def pisah_jumlah_satuan(crop):
             "pesan": "Celah jumlah-satuan tidak ditemukan.",
         }
 
-    jumlah = _rapatkan(crop[:, :x_batas])
-    satuan = _rapatkan(crop[:, x_batas:])
+    jumlah, bbox_jumlah = _rapatkan(crop[:, :x_batas])
+    satuan, _ = _rapatkan(crop[:, x_batas:])
 
     if jumlah is None or satuan is None:
         return {
@@ -393,6 +465,7 @@ def pisah_jumlah_satuan(crop):
 
     return {
         "jumlah": jumlah,
+        "bbox_jumlah": bbox_jumlah,
         "satuan": satuan,
         "status": "terpisah",
         "pesan": "Jumlah dan satuan dipisah berdasarkan celah.",

@@ -649,6 +649,82 @@ def tingkatkan_kualitas(gambar):
 # ALUR LENGKAP
 # =========================================
 
+
+def _batas_pratinjau_kertas(crop):
+    """Persempit crop tampilan hanya jika garis tepi dan tinta mendukungnya."""
+    h, w = crop.shape[:2]
+    ukuran = min(w, h)
+    if ukuran < 80:
+        return 0, 0, w, h
+    abu = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    tepi = cv2.Canny(cv2.GaussianBlur(abu, (5, 5), 0), 8, 29)
+    garis = cv2.HoughLinesP(
+        tepi, 1, np.pi / 360, threshold=max(28, round(0.21 * ukuran)),
+        minLineLength=round(0.37 * ukuran), maxLineGap=round(0.065 * ukuran),
+    )
+    if garis is None:
+        return 0, 0, w, h
+
+    # Lindungi komponen gelap yang ukurannya wajar sebagai detail nota.
+    gelap = (abu < min(148, 0.68 * np.median(abu))).astype(np.uint8)
+    stats = cv2.connectedComponentsWithStats(gelap, connectivity=8)[2][1:]
+    tinta = np.array([
+        k for k in stats if k[4] >= 8 and 2 <= k[2] <= 0.16 * w and 3 <= k[3] <= 0.18 * h
+    ])
+    if not tinta.size:
+        return 0, 0, w, h
+
+    batas_tinta = int(np.max(tinta[:, 1] + tinta[:, 3]))
+    mendatar, tegak = [], []
+    for x, y, u, v in garis[:, 0]:
+        dx, dy = abs(u - x), abs(v - y)
+        if dy <= 0.07 * dx and dx >= 0.38 * w:
+            mendatar.append(int(max(y, v)))
+        if dx <= 0.065 * dy and dy >= 0.42 * h:
+            tegak.append((min(x, u), max(x, u), min(y, v), max(y, v)))
+
+    bawah = h
+    calon_bawah = [y for y in mendatar if batas_tinta <= y + 4 and y >= 0.48 * h]
+    if calon_bawah:
+        bawah = min(h, max(calon_bawah) + 4)
+    # Saat batas bawah putih bertemu putih, gunakan ujung lintasan sisi
+    # kertas yang berlanjut hingga melewati seluruh isi gelap.
+    elif tegak:
+        ujung_sisi = []
+        sisi_kiri = [k for k in tegak if k[1] < 0.13 * w]
+        sisi_kanan = [k for k in tegak if k[0] > 0.87 * w]
+        for sisi in (sisi_kiri, sisi_kanan):
+            for x0, _, y0, y1 in sisi:
+                if y0 > 0.16 * h:
+                    continue
+                lintasan = [
+                    k for k in sisi if abs(k[0] - x0) <= 0.045 * w and k[2] <= y1 and k[3] >= y0
+                ]
+                ujung = max(k[3] for k in lintasan)
+                if batas_tinta <= ujung + 4 and ujung - y0 >= 0.52 * h:
+                    ujung_sisi.append(ujung)
+        if ujung_sisi:
+            bawah = min(h, max(ujung_sisi) + 4)
+
+    kiri, kanan = 0, w
+    # Sisi pendek perlu didukung perbedaan warna antara kertas dan alas.
+    min_x = int(np.min(tinta[:, 0]))
+    max_x = int(np.max(tinta[:, 0] + tinta[:, 2]))
+    saturasi = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)[..., 1]
+    for x0, x1, y0, y1 in tegak:
+        if y0 > 0.17 * bawah:
+            continue
+        if y1 >= 0.82 * bawah and x1 < 0.13 * w and x0 - 4 <= min_x:
+            kiri = max(kiri, x0 - 4)
+        if x0 > 0.87 * w and x1 + 4 >= max_x:
+            luar = saturasi[y0:y1, x1 + 4:min(w, x1 + 22)]
+            dalam = saturasi[y0:y1, max(0, x0 - 20):max(0, x0 - 3)]
+            berwarna = luar.size and dalam.size and np.median(luar) > np.median(dalam) + 18
+            if y1 >= 0.82 * bawah or (y1 >= 0.66 * bawah and berwarna):
+                kanan = min(kanan, x1 + 4)
+    return int(kiri), 0, int(kanan), int(bawah)
+
+
 def preprocess_nota(gambar):
     """
     Jalankan alur preprocessing lengkap.
@@ -671,9 +747,6 @@ def preprocess_nota(gambar):
         # peningkatan kualitas dilewati agar clutter latar tidak ikut
         # direntangkan menjadi noise.
         hasil = potong["gambar"]
-        crop_tampil = crop_base
-        tampil = hasil
-        trim_tampil = (0, 0, 0, 0)
     else:
         x_min, y_min, x_max, y_max = bbox
         kertas = tingkatkan_kualitas(crop_base)
@@ -685,31 +758,22 @@ def preprocess_nota(gambar):
         hasil = potong["gambar"].copy()
         hasil[y_min:y_max, x_min:x_max] = kertas
 
-        # Gambar untuk tampilan: crop ketat yang dirapikan tepinya saja.
-        # Tidak ada piksel isi yang diubah/dihapus. Setelah dipangkas,
-        # sisa latar yang miring (tidak full-height) diputihkan agar tepi
-        # crop benar-benar bersih. Geometri tidak berubah, jadi pemetaan
-        # kotak field pada halaman Segmentasi tetap sama.
-        crop_tampil = _trim_latar(crop_base)[0]
-        tampil, trim_tampil = _trim_latar(kertas)
-        tampil = _putihkan_latar_tepi(tampil)
-
+    kiri, atas, kanan, bawah = _batas_pratinjau_kertas(crop_base)
     return {
         # "asli" hanya ditampilkan (tidak diubah), jadi cukup rujuk gambar
         # masukan tanpa menyalin. Menyalin citra penuh per nota membebani
         # memori pada mesin ber-RAM kecil.
         "asli": gambar,
-        "crop": crop_tampil,
+        "crop_dasar": crop_base,
+        "crop": crop_base[atas:bawah, kiri:kanan],
+        "bbox_pratinjau": (kiri, atas, kanan, bawah),
         "hasil": hasil,
-        "tampil": tampil,
-        # Posisi kertas pada kanvas asli + offset pemangkasan latar pada
-        # gambar tampil; dipakai halaman Segmentasi untuk memetakan kotak
-        # field (ruang kanvas) ke ruang gambar tampil.
+        "tampil": hasil,
         "bbox_kertas": bbox,
-        "trim_tampil": trim_tampil,
+        "trim_tampil": (0, 0, 0, 0),
         "kotak": potong["kotak"],
         "status": potong["status"],
         "pesan": potong["pesan"],
-        "metode": METODE_PENINGKATAN,
+        "metode": METODE_PENINGKATAN if bbox is not None else "Citra asli",
     }
 

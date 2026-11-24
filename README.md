@@ -55,16 +55,16 @@ database/               Basis data SQLite transaksi (dibuat saat Simpan Data)
 |---|---|
 | `dataset_loader.py` | Memuat gambar, normalisasi karakter 32x32 |
 | `deteksi_baris.py` | Mendeteksi baris teks pada nota |
-| `deteksi_field.py` | Menemukan field: nomor, penerima, proyek, produk, jumlah, satuan, harga |
+| `deteksi_field.py` | Menemukan nomor nota, penerima, proyek, nama produk, jumlah, dan harga satuan |
 | `pemrosesan_field.py` | Isolasi nomor nota, pembersihan minus, pemisahan jumlah/satuan |
-
-Catatan: field **satuan** tetap dideteksi karena dipakai untuk memisahkan
-jumlah dari satuannya, tetapi tidak ditampilkan di halaman Segmentasi,
-Pengenalan, maupun Evaluasi karena bukan bagian data transaksi yang disimpan.
 | `segmentasi_karakter.py` | Projection profile + Dynamic Programming + CNN |
 | `pengenalan_karakter.py` | Memuat CNN dan Template Matching, penggabungan keputusan |
 | `lokalisasi_template.py` | Pencocokan pola karakter dengan template (eksperimen) |
 | `data_transaksi.py` | Validasi angka nota, simpan SQLite, dan unduh CSV |
+
+Satuan barang seperti Pcs atau M2 dipakai secara internal untuk menentukan
+batas crop Jumlah. Setiap baris produk mengeluarkan Nama Produk, Jumlah,
+dan Harga Satuan.
 
 ## Metode
 

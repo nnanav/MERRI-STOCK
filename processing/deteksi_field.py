@@ -184,10 +184,17 @@ def deteksi_produk(kandidat, lebar, tinggi):
         nama_terpakai.add(identitas)
         hasil.append(nama)
 
-    return sorted(
+    hasil = sorted(
         hasil,
         key=lambda k: k["cy"]
     )
+    if len(hasil) < 2:
+        return hasil
+
+    jangkar = _jangkar_header(kandidat, lebar, tinggi)
+    penerima = (jangkar[0] if jangkar else
+                _deteksi_penerima_proyek_lama(kandidat, lebar, tinggi)[0])
+    return _deduplikasi_produk(hasil, penerima["x1"] if penerima else None)
 
 
 # DETEKSI FIELD TAMBAHAN
@@ -365,7 +372,101 @@ def _nilai_setelah_label(grup):
     return _kotak_gabung(calon)
 
 
+def _jangkar_header(kandidat, lebar, tinggi):
+    """Temukan deret tiga nilai header yang berbagi awal kolom dan jarak baris."""
+    pita = [k for k in kandidat if 0.12 * tinggi <= k["cy"] <= 0.34 * tinggi]
+    if not pita:
+        return None
+
+    skala = float(np.median([k["h"] for k in pita]))
+    nilai = [
+        k for k in pita
+        if 0.23 * lebar <= k["x1"] <= 0.55 * lebar
+        and 0.65 * skala <= k["h"] <= 1.5 * skala
+        and k["w"] >= 2.1 * skala
+        and any(
+            label["x1"] < k["x1"] - 1.8 * skala
+            and abs(label["x2"] - k["x1"]) <= 5.5 * skala
+            and abs(label["cy"] - k["cy"]) <= 1.12 * skala
+            for label in pita
+        )
+    ]
+    pilihan = []
+    for penerima in nilai:
+        for proyek in nilai:
+            jarak = proyek["cy"] - penerima["cy"]
+            if (not 0.52 * skala <= jarak <= 1.60 * skala
+                    or abs(penerima["x1"] - proyek["x1"]) > 0.75 * skala):
+                continue
+            for terbilang in nilai:
+                jarak_kedua = terbilang["cy"] - proyek["cy"]
+                geser = abs(penerima["x1"] - terbilang["x1"])
+                if (not 0.52 * skala <= jarak_kedua <= 1.60 * skala
+                        or geser > 0.75 * skala
+                        or abs(jarak - jarak_kedua) > 0.38 * skala
+                        or terbilang["w"] < 1.10 * proyek["w"]):
+                    continue
+                # Deret yang rapi bisa terbentuk dengan melompati baris
+                # proyek. Tolak jika ada nilai sejajar di antara jangkar,
+                # sambil memberi jarak agar fragmen satu baris tidak dihitung.
+                if any(
+                    abs(k["x1"] - penerima["x1"]) <= 0.75 * skala
+                    and (
+                        penerima["cy"] + 0.43 * skala < k["cy"] < proyek["cy"] - 0.43 * skala
+                        or proyek["cy"] + 0.43 * skala < k["cy"] < terbilang["cy"] - 0.43 * skala
+                    )
+                    for k in nilai
+                ):
+                    continue
+                galat = abs(jarak - jarak_kedua) + geser + abs(penerima["x1"] - proyek["x1"])
+                pilihan.append(((penerima["cy"], galat), (penerima, proyek, terbilang)))
+    return min(pilihan, key=lambda item: item[0])[1] if pilihan else None
+
+
+def _deduplikasi_produk(produk, x_nilai):
+    """Satu baris fisik hanya dapat membentuk satu nama produk."""
+    baris = []
+    for kotak in produk:
+        if not baris:
+            baris.append(kotak)
+            continue
+        sebelumnya = baris[-1]
+        if abs(sebelumnya["cy"] - kotak["cy"]) > 0.42 * min(kotak["h"], sebelumnya["h"]):
+            baris.append(kotak)
+        elif x_nilai is not None and abs(kotak["x1"] - x_nilai) < abs(sebelumnya["x1"] - x_nilai):
+            baris[-1] = kotak
+    return baris
+
+
 def deteksi_penerima_proyek(kandidat, lebar, tinggi):
+    lama = _deteksi_penerima_proyek_lama(kandidat, lebar, tinggi)
+    jangkar = _jangkar_header(kandidat, lebar, tinggi)
+    if jangkar is None:
+        return lama
+
+    hasil = []
+    for i, (kotak_lama, nilai) in enumerate(zip(lama, jangkar)):
+        h = nilai["h"]
+        if (kotak_lama is not None
+                and kotak_lama["x1"] >= nilai["x1"] - 0.90 * h
+                and kotak_lama["h"] <= 1.38 * h
+                and abs(kotak_lama["cy"] - nilai["cy"]) <= 0.45 * h):
+            hasil.append(kotak_lama)
+            continue
+
+        # Batasi sisi vertikal di antara pusat baris nilai yang bersebelahan.
+        atas = max(nilai["y1"], round((jangkar[i - 1]["cy"] + nilai["cy"]) / 2)) if i else nilai["y1"]
+        bawah = min(nilai["y2"], round((jangkar[i + 1]["cy"] + nilai["cy"]) / 2))
+        if bawah <= atas:
+            hasil.append(kotak_lama)
+        else:
+            hasil.append(_kotak_gabung([{
+                "x1": nilai["x1"], "x2": nilai["x2"], "y1": atas, "y2": bawah,
+            }]))
+    return tuple(hasil)
+
+
+def _deteksi_penerima_proyek_lama(kandidat, lebar, tinggi):
     # Berbasis label: baris "Telah diterima dari" dan "Proyek" berada di
     # kolom label kiri. Nilai diambil dari kandidat di kanan label pada
     # baris yang sama, sehingga label tidak ikut serta.
@@ -449,6 +550,89 @@ def deteksi_harga_satuan(kandidat, lebar, tinggi, produk):
         ]
         kandidat_baris.sort(key=lambda k: k["x1"])
         hasil.append(kandidat_baris[0])
+    if all(k is not None for k in hasil):
+        return hasil
+
+    # Jika teks miring, kolom jumlah lebih dekat ke harga daripada nama
+    # produk. Gunakan jumlah sebagai jangkar cadangan untuk harga.
+    rincian = deteksi_field_lain(kandidat, lebar, tinggi, produk)["rincian_produk"]
+    for i, (harga, baris) in enumerate(zip(hasil, rincian)):
+        jumlah = baris.get("jumlah_satuan")
+        if harga is not None or jumlah is None:
+            continue
+        calon = [
+            k for k in kandidat
+            if k["x1"] >= max(0.70 * lebar, jumlah["x2"] + 8)
+            and k["w"] >= 28
+            and abs(k["cy"] - jumlah["cy"]) <= max(6, 0.50 * jumlah["h"])
+            and k not in hasil
+        ]
+        if calon:
+            hasil[i] = min(calon, key=lambda k: k["x1"])
+    return hasil
+
+
+def deteksi_baris_transaksi(kandidat, lebar, tinggi):
+    """Pasangkan satu nama, jumlah dengan satuan internal, dan harga per baris."""
+    produk = deteksi_produk(kandidat, lebar, tinggi)
+    rincian = deteksi_field_lain(kandidat, lebar, tinggi, produk)["rincian_produk"]
+    harga = deteksi_harga_satuan(kandidat, lebar, tinggi, produk)
+
+    jangkar = _jangkar_header(kandidat, lebar, tinggi)
+    awal_nilai = ([k["x1"] for k in jangkar] if jangkar
+                  else [p["x1"] for p in produk if p["x1"] < 0.52 * lebar])
+    x_nilai = float(np.median(awal_nilai)) if awal_nilai else None
+    awal_harga = [k["x1"] for k in harga if k is not None]
+    x_harga = float(np.median(awal_harga)) if len(awal_harga) >= 3 else None
+
+    hasil = []
+    for produk_awal, detail, kotak_harga in zip(produk, rincian, harga):
+        nama = produk_awal
+        jumlah = detail.get("jumlah_satuan")
+        h = produk_awal["h"]
+        if x_nilai is not None and produk_awal["x1"] - x_nilai > 3 * h:
+            # Deteksi awal bisa memilih kolom konversi sebagai nama.
+            pilihan = [
+                k for k in kandidat
+                if abs(k["x1"] - x_nilai) <= 2.2 * h
+                and k["x2"] < produk_awal["x1"] - h // 3
+                and abs(k["cy"] - produk_awal["cy"]) <= 0.55 * h
+                and k["h"] >= 0.64 * h and k["w"] >= 2.4 * h
+            ]
+            if pilihan:
+                nama = min(pilihan, key=lambda k: (
+                    abs(k["x1"] - x_nilai), abs(k["cy"] - produk_awal["cy"]),
+                ))
+
+        if nama is not produk_awal:
+            if kotak_harga is None and jumlah is not None:
+                continue
+            # Pada tabel dengan harga sejajar, subtotal dapat menyisakan
+            # kotak mata uang di kanan tanpa angka pada kolom harga satuan.
+            if (x_harga is not None and kotak_harga is not None
+                    and kotak_harga["x1"] - x_harga > 1.6 * kotak_harga["h"]):
+                continue
+
+        if kotak_harga is not None:
+            # Interpolasi garis nama–harga mengakomodasi kemiringan baris.
+            # Jumlah utama adalah kandidat pertama sebelum blok konversi.
+            calon = []
+            jarak_x = max(1.0, kotak_harga["cx"] - nama["cx"])
+            for k in kandidat:
+                if (k["x1"] < max(0.52 * lebar, nama["x2"] + 4)
+                        or k["x2"] > kotak_harga["x1"] - 2 or k["w"] < 27
+                        or k["h"] > 1.45 * nama["h"]):
+                    continue
+                fraksi = (k["cx"] - nama["cx"]) / jarak_x
+                y = nama["cy"] + fraksi * (kotak_harga["cy"] - nama["cy"])
+                if abs(k["cy"] - y) <= 0.40 * min(k["h"], nama["h"], kotak_harga["h"]):
+                    calon.append(k)
+            if calon:
+                jumlah = min(calon, key=lambda k: k["x1"])
+            elif jumlah is not None and jumlah["x2"] > kotak_harga["x1"]:
+                jumlah = None
+
+        hasil.append((nama, jumlah, kotak_harga))
     return hasil
 
 
@@ -519,6 +703,33 @@ def cari_harga_satuan(kecil, produk, lebar):
     return hasil
 
 
+def _potong_label_titik_dua(crop):
+    """Pisahkan label hanya bila titik dua terisolasi di antara dua blok teks."""
+    abu = crop if crop.ndim == 2 else cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    biner = cv2.threshold(abu, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
+    stats = cv2.connectedComponentsWithStats(biner, connectivity=8)[2][1:]
+    besar = [k for k in stats if k[4] >= 12 and k[3] >= 5]
+    if len(besar) < 4:
+        return crop
+    tinggi = np.median([k[3] for k in besar])
+    kecil = [k for k in stats if k[4] >= 2 and k[2] <= 0.42 * tinggi
+             and 1 <= k[3] <= 0.47 * tinggi]
+    for x, y, w, h, _ in kecil:
+        for u, v, ww, hh, _ in kecil:
+            if abs(x - u) > max(1, 0.16 * tinggi) or not 0.35 * tinggi <= v - y <= 1.05 * tinggi:
+                continue
+            tengah = (y + h / 2 + v + hh / 2) / 2
+            if not 0.22 * len(biner) <= tengah <= 0.77 * len(biner):
+                continue
+            batas = max(x + w, u + ww)
+            kiri = [k[0] + k[2] for k in besar if k[0] + k[2] < x]
+            kanan = [k[0] for k in besar if k[0] > u + ww]
+            if (len(kiri) >= 2 and len(kanan) >= 2 and x - max(kiri) >= 0.72 * tinggi
+                    and min(kanan) - batas >= 0.45 * tinggi):
+                return crop[:, batas:].copy()
+    return crop
+
+
 def pangkas_awalan_tipis(crop):
     """
     Buang awalan tipis (titik dua, titik, noise) di kiri crop nilai.
@@ -530,6 +741,7 @@ def pangkas_awalan_tipis(crop):
     if crop is None or crop.size == 0:
         return crop
 
+    crop = _potong_label_titik_dua(crop)
     abu = crop if crop.ndim == 2 else cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
     h, w = abu.shape[:2]
     if h < 4 or w < 8:
@@ -560,7 +772,77 @@ def pangkas_awalan_tipis(crop):
     return crop[:, batas:].copy()
 
 
+def _batas_harga_sebelum_sama_dengan(crop, *, lindungi_digit=False):
+    abu = crop if crop.ndim == 2 else cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    biner = cv2.threshold(abu, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
+    h, w = biner.shape
+    garis = cv2.morphologyEx(biner, cv2.MORPH_OPEN, np.ones((1, max(17, w // 4)), np.uint8))
+    tinta = cv2.subtract(biner, garis)
+    stats = cv2.connectedComponentsWithStats(tinta, connectivity=8)[2][1:]
+    tinggi_komponen = [k[3] for k in stats if k[3] >= 0.23 * h and k[4] >= 12]
+    if len(tinggi_komponen) < 4:
+        return None
+    tinggi = np.median(tinggi_komponen)
+    batang = cv2.morphologyEx(
+        tinta, cv2.MORPH_OPEN, np.ones((1, max(3, round(0.38 * tinggi))), np.uint8),
+    )
+    stats_batang = cv2.connectedComponentsWithStats(batang, connectivity=8)[2][1:]
+    calon = sorted(
+        tuple(k[:4]) for k in stats_batang
+        if 0.36 * tinggi <= k[2] <= 1.15 * tinggi and k[3] <= 0.43 * tinggi
+    )
+    for x, y, lebar, tebal in calon:
+        if x < 2.3 * tinggi:
+            continue
+        for u, v, ww, hh in calon:
+            if (abs(x - u) > 1 + 0.1 * tinggi or abs(lebar - ww) > 0.35 * tinggi
+                    or not 0.14 * tinggi <= v - y <= 0.68 * tinggi or v - y < tebal):
+                continue
+            awal = min(x, u)
+            if lindungi_digit:
+                ujung = max(x + lebar, u + ww)
+                # Opening horizontal juga mengekstrak batang dari digit.
+                # Tolak separator yang masih berada di dalam badan digit.
+                if any(k[0] < ujung and k[0] + k[2] > awal
+                       and k[3] >= 0.66 * tinggi for k in stats):
+                    continue
+            kiri = [k for k in stats if k[0] + k[2] <= awal - 0.30 * tinggi
+                    and k[3] >= 0.62 * tinggi and k[4] >= 8]
+            kanan = any(k[0] > max(x + lebar, u + ww) and k[3] >= 0.62 * tinggi
+                        for k in stats)
+            if len(kiri) < 2 or not kanan:
+                continue
+            tepi_tinta = max(k[0] + k[2] for k in kiri)
+            tengah_tinta = np.median([k[1] + k[3] / 2 for k in kiri])
+            if (abs((y + v + hh) / 2 - tengah_tinta) > 0.38 * tinggi
+                    or awal - tepi_tinta < 0.52 * tinggi
+                    or np.count_nonzero(tinta[:, awal - 2]) > 2):
+                continue
+            batas = awal - 1
+            if np.any(garis[:, :batas]):
+                batas = min(batas, tepi_tinta + 2)
+            return batas
+    return None
+
+
 def pangkas_hingga_rp(crop):
+    """Utamakan pemisah = yang terverifikasi sebelum kolom Rp dan total."""
+    lama = _pangkas_harga_lama(crop)
+    if lama is None or not lama.size:
+        return lama
+    batas = _batas_harga_sebelum_sama_dengan(crop)
+    if batas is not None and batas + 4 < lama.shape[1]:
+        lama = crop[:, :batas].copy()
+    if min(crop.shape[:2]) >= 4:
+        aman = _batas_harga_sebelum_sama_dengan(crop, lindungi_digit=True)
+        # Separator yang utuh boleh memperbaiki batas terlalu dini
+        # maupun membuang sisa Rp yang ikut tertangkap.
+        if aman is not None and abs(aman - lama.shape[1]) > 4:
+            return crop[:, :aman].copy()
+    return lama
+
+
+def _pangkas_harga_lama(crop):
     """
     Pangkas crop harga agar berhenti sebelum tulisan "= Rp".
 

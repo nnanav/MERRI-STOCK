@@ -79,14 +79,14 @@ for nama in ("nota_52.jpeg", "nota_01.jpeg"):
         karakter_tab += len(kar)
 
     # Perkiraan: 2 gambar per field (asli + bounding box) + potongan karakter.
-    harap_gambar = 2 * len(field_tab) + karakter_tab
+    harap_gambar = 1 + 2 * len(field_tab) + karakter_tab
 
     catat(f"=== {nama} ({len(det['fields'])} field) ===")
     catat(f"  exception         : {[e.value for e in at.exception]}")
     catat(f"  tabs              : {len(at.tabs)} (harus 6)")
     catat(f"  expander          : {len(at.expander)} (harus 0)")
     catat(f"  gambar            : {n_gambar} "
-          f"(harap 2x{len(field_tab)} + {karakter_tab} = {harap_gambar})")
+          f"(harap 1 + 2x{len(field_tab)} + {karakter_tab} = {harap_gambar})")
     catat(f"  gambar cocok      : {n_gambar == harap_gambar}")
     catat(f"  ada HTML mentah   : {'<span' in teks_md or '<div' in teks_md}")
     catat(f"  jumlah 'terdeteksi': "
@@ -108,6 +108,7 @@ for nama in ("nota_52.jpeg", "nota_01.jpeg"):
     catat(f"  ada mojibake      : {rusak}")
 
     assert len(at.tabs) == 6, f"tabs = {len(at.tabs)}"
+    assert any(h.value == "Deteksi Lokasi Field" for h in at.subheader)
     assert not at.expander, "halaman tidak boleh memakai expander"
     assert n_gambar == harap_gambar, (n_gambar, harap_gambar)
     # Satuan tidak ditampilkan, jadi jumlah field tampil = field tanpa satuan.

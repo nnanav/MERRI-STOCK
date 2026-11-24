@@ -9,8 +9,7 @@ import streamlit as st
 
 from processing.deteksi_baris import deteksi_baris
 from processing.deteksi_field import (
-    deteksi_produk, deteksi_field_lain,
-    deteksi_penerima_proyek, deteksi_harga_satuan,
+    deteksi_baris_transaksi, deteksi_penerima_proyek,
     pangkas_awalan_tipis, pangkas_hingga_rp,
 )
 from processing.data_transaksi import (
@@ -21,6 +20,7 @@ from processing.pemrosesan_field import (
     cari_tanggal, baca_gambar, segmentasi_per_karakter,
 )
 from processing.preprocessing_nota import preprocess_nota
+from processing.validasi_lokasi import validasi_baris, validasi_header
 from ui.tema import (
     alur, kepala_halaman, legenda_status, pasang_tema, seksi,
     sidebar_brand, sidebar_label_menu, sidebar_status,
@@ -404,7 +404,7 @@ def jalankan_deteksi(gambar_bgr):
         Field harga berisi angka dengan titik ribuan yang hanya setebal
         ~1 px di ruang proses, sehingga mudah hilang saat gambar diperkecil
         ke 1400 px. Field harga karena itu dipotong dari gambar asli.
-        Field teks (penerima, proyek, produk, satuan) tetap dipotong dari
+        Field teks (penerima, proyek, produk) tetap dipotong dari
         gambar proses karena segmentasinya lebih stabil di ukuran itu.
         """
         if kotak is None:
@@ -419,19 +419,22 @@ def jalankan_deteksi(gambar_bgr):
         "w": x2 - x1, "h": y2 - y1,
     } for (x1, y1, x2, y2) in kotak]
 
-    produk = deteksi_produk(kandidat, W, H)
-    info = deteksi_field_lain(kandidat, W, H, produk)
-
     nomor = isolasi_nomor(kecil)
-
-    penerima, proyek = deteksi_penerima_proyek(kandidat, W, H)
-    harga = deteksi_harga_satuan(kandidat, W, H, produk)
+    header, anchor = validasi_header(
+        kecil, kandidat, deteksi_penerima_proyek(kandidat, W, H),
+        nomor.get("bbox_digit"),
+    )
+    penerima, proyek = header
+    baris_transaksi = validasi_baris(
+        kecil, kandidat, deteksi_baris_transaksi(kandidat, W, H), anchor,
+    )
+    produk = [nama for nama, _, _ in baris_transaksi]
 
     fields = []
 
     fields.append({
         "id": "nomor", "label": "Nomor Nota", "jenis": "nomor",
-        "bbox": nomor.get("bbox"),
+        "bbox": nomor.get("bbox_digit"),
         "crop_ocr": nomor.get("crop_digit"),
         "crop_show": nomor.get("crop_digit"),
         "status": nomor.get("status"),
@@ -444,18 +447,16 @@ def jalankan_deteksi(gambar_bgr):
             crop = pangkas_hingga_rp(crop)
         elif crop is not None and jenis in ("penerima", "proyek"):
             crop = pangkas_awalan_tipis(crop)
-        # Bila crop dipangkas, sesuaikan bbox agar kotak di UI ikut pas.
+        # Pangkas awalan dari kiri dan pangkas harga dari kanan.
         bbox = None
         if kotak is not None:
-            lebar_asli = int(kotak["x2"]) - int(kotak["x1"])
-            lebar_crop = lebar_asli
+            x1, x2 = int(kotak["x1"]), int(kotak["x2"])
             if crop is not None:
-                lebar_crop = crop.shape[1]
                 if jenis == "harga":
-                    # Crop harga berasal dari gambar asli.
-                    lebar_crop = lebar_ke_proses(lebar_crop)
-            bbox = (int(kotak["x1"]), int(kotak["y1"]),
-                    int(kotak["x1"]) + int(lebar_crop), int(kotak["y2"]))
+                    x2 = x1 + lebar_ke_proses(crop.shape[1])
+                elif jenis in ("penerima", "proyek"):
+                    x1 = x2 - crop.shape[1]
+            bbox = (x1, int(kotak["y1"]), x2, int(kotak["y2"]))
         return {
             "id": fid, "label": label, "jenis": jenis,
             "bbox": bbox,
@@ -467,15 +468,18 @@ def jalankan_deteksi(gambar_bgr):
     fields.append(field_dari_kotak("penerima", "Nama Penerima", "penerima", penerima))
     fields.append(field_dari_kotak("proyek", "Proyek", "proyek", proyek))
 
-    for i, p in enumerate(produk, 1):
+    for i, (p, kj, kotak_harga) in enumerate(baris_transaksi, 1):
         crop = crop_field(p, "produk")
         bersih = bersihkan_minus(crop) if crop is not None else None
         crop_produk = bersih["crop"] if bersih else None
+        bbox_produk = None
+        if crop_produk is not None:
+            ph, pw = crop_produk.shape[:2]
+            x1, y1, x2, y2 = bersih.get("bbox_crop", (0, 0, pw, ph))
+            bbox_produk = (p["x1"] + x1, p["y1"] + y1,
+                           p["x1"] + x2, p["y1"] + y2)
 
-        rincian = info["rincian_produk"][i - 1] if i - 1 < len(info["rincian_produk"]) else {}
-        kj = rincian.get("jumlah_satuan")
         kotak_j = crop_j = None
-        kotak_s = crop_s = None
 
         if kj is not None:
             # Perluas ke kiri agar token jumlah yang terpotong ikut masuk.
@@ -484,37 +488,28 @@ def jalankan_deteksi(gambar_bgr):
             if cjs is not None:
                 pisah = pisah_jumlah_satuan(cjs)
                 crop_j = pisah.get("jumlah")
-                crop_s = pisah.get("satuan")
-                xb = pisah.get("x_batas") or kj["w"]
-                kotak_j = {"x1": kj["x1"], "y1": kj["y1"],
-                           "x2": kj["x1"] + xb, "y2": kj["y2"]}
-                kotak_s = {"x1": kj["x1"] + xb, "y1": kj["y1"],
-                           "x2": kj["x2"], "y2": kj["y2"]}
+                if crop_j is not None:
+                    jh, jw = crop_j.shape[:2]
+                    x1, y1, x2, y2 = pisah.get("bbox_jumlah", (0, 0, jw, jh))
+                    kotak_j = (kj["x1"] + x1, kj["y1"] + y1,
+                               kj["x1"] + x2, kj["y1"] + y2)
 
         fields.append({
             "id": f"produk_{i}", "label": f"Nama Produk {i}", "jenis": "produk",
-            "bbox": (p["x1"], p["y1"], p["x2"], p["y2"]),
+            "bbox": bbox_produk,
             "crop_ocr": crop_produk, "crop_show": crop_produk,
             "status": "ok" if crop_produk is not None else "crop_kosong",
             "pesan": bersih["pesan"] if bersih else "produk tidak terbaca",
         })
         fields.append({
             "id": f"jumlah_{i}", "label": f"Jumlah {i}", "jenis": "jumlah",
-            "bbox": (kotak_j["x1"], kotak_j["y1"], kotak_j["x2"], kotak_j["y2"]) if kotak_j else None,
+            "bbox": kotak_j,
             "crop_ocr": crop_j, "crop_show": crop_j,
             "status": "ok" if crop_j is not None else "tidak_terdeteksi",
             "pesan": "jumlah",
         })
-        fields.append({
-            "id": f"satuan_{i}", "label": f"Satuan {i}", "jenis": "satuan",
-            "bbox": (kotak_s["x1"], kotak_s["y1"], kotak_s["x2"], kotak_s["y2"]) if kotak_s else None,
-            "crop_ocr": crop_s, "crop_show": crop_s,
-            "status": "ok" if crop_s is not None else "tidak_terdeteksi",
-            "pesan": "satuan",
-        })
         fields.append(field_dari_kotak(
-            f"harga_{i}", f"Harga Satuan {i}", "harga",
-            harga[i - 1] if i - 1 < len(harga) else None,
+            f"harga_{i}", f"Harga Satuan {i}", "harga", kotak_harga,
         ))
 
     # "biner" dan "visual" dari deteksi_baris tidak disimpan: keduanya tidak
@@ -529,37 +524,69 @@ def jalankan_deteksi(gambar_bgr):
     }
 
 
-def gambar_kotak_field(base, fields, skala=1.0, ox=0.0, oy=0.0):
-    # Gambar bounding box tiap field di atas citra `base`.
-    # Kotak field disimpan dalam ruang pemrosesan (lebar 1400); parameter
-    # skala/ox/oy memetakannya ke ruang citra `base` bila berbeda.
+WARNA_FIELD = {
+    "nomor": (78, 45, 20),
+    "penerima": (115, 128, 15),
+    "proyek": (169, 88, 38),
+    "produk": (70, 105, 33),
+    "jumlah": (14, 91, 166),
+    "harga": (141, 61, 120),
+}
+
+
+def _field_berkotak(fields):
+    return [
+        f for f in fields
+        if f.get("bbox") and f["jenis"] in WARNA_FIELD
+        and f.get("crop_ocr") is not None and f["crop_ocr"].size
+    ]
+
+
+def gambar_kotak_field(base, fields):
+    """Buat salinan beranotasi di koordinat gambar kerja deteksi."""
     vis = base.copy()
-    warna = {
-        "nomor": (0, 0, 255),
-        "penerima": (0, 140, 255),
-        "proyek": (255, 140, 0),
-        "produk": (0, 160, 0),
-        "jumlah": (255, 0, 0),
-        "satuan": (0, 200, 200),
-        "harga": (180, 0, 180),
-    }
+    abu = cv2.cvtColor(base, cv2.COLOR_BGR2GRAY)
     H, W = vis.shape[:2]
-    for f in fields:
-        bb = f.get("bbox")
-        if not bb:
-            continue
-        x1 = int(round(int(bb[0]) / skala - ox))
-        y1 = int(round(int(bb[1]) / skala - oy))
-        x2 = int(round(int(bb[2]) / skala - ox))
-        y2 = int(round(int(bb[3]) / skala - oy))
-        x1 = max(0, min(W - 1, x1)); x2 = max(0, min(W - 1, x2))
-        y1 = max(0, min(H - 1, y1)); y2 = max(0, min(H - 1, y2))
+    label = []
+    for nomor, f in enumerate(_field_berkotak(fields), 1):
+        bb = f["bbox"]
+        c = WARNA_FIELD[f["jenis"]]
+        x1, x2 = [max(0, min(W, int(bb[i]))) for i in (0, 2)]
+        y1, y2 = [max(0, min(H, int(bb[i]))) for i in (1, 3)]
         if x2 <= x1 or y2 <= y1:
             continue
-        c = warna.get(f["jenis"], (0, 0, 0))
-        cv2.rectangle(vis, (x1, y1), (x2, y2), c, 2)
-        cv2.putText(vis, f["label"], (x1, max(12, y1 - 4)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, c, 1)
+        cv2.rectangle(vis, (x1, y1), (x2 - 1, y2 - 1), c, 1)
+        label.append((x1, y1, x2, y2, str(nomor), c))
+
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    # Jaga ruang di dalam setiap kotak tetap terlihat pada baris rapat.
+    terpakai = [(a, b, u + 1, v + 1) for a, b, u, v, _, _ in label]
+    for x1, y1, x2, y2, teks, c in sorted(label, key=lambda box: (box[1], box[0])):
+        (tw, th), dasar = cv2.getTextSize(teks, font, 0.52, 1)
+        w, h = tw + 8, th + dasar + 4
+        calon = []
+        for i in range(6):
+            jauh = i * (h + 3) + 3
+            opsi = [(x1, y1 - h - jauh), (x1, y2 + jauh),
+                    (x1 - w - jauh, (y1 + y2 - h) // 2),
+                    (x2 + jauh, (y1 + y2 - h) // 2)]
+            for x, y in opsi:
+                if (0 <= x <= W - w and 0 <= y <= H - h and not any(
+                    x < u and x + w > a and y < v and y + h > b
+                    for a, b, u, v in terpakai
+                )):
+                    tinta = np.count_nonzero(abu[y:y + h, x:x + w] < 195)
+                    calon.append((tinta, i, x, y))
+        if not calon:
+            continue
+        _, _, x, y = min(calon)
+        terpakai.append((x, y, x + w, y + h))
+        px, py = x + w // 2, y + h // 2
+        tepi = (min(x2, max(x1, px)), min(y2, max(y1, py)))
+        cv2.line(vis, tepi, (px, py), c, 1)
+        cv2.rectangle(vis, (x, y), (x + w - 1, y + h - 1), c, -1)
+        cv2.putText(vis, teks, (x + 4, y + th + 2), font,
+                    0.52, (255, 255, 255), 1, cv2.LINE_AA)
     return vis
 
 
@@ -628,10 +655,11 @@ def halaman_upload():
 
     kol_unggah, kol_panduan = st.columns([3, 2], gap="large")
     with kol_unggah:
-        berkas = st.file_uploader(
-            "Unggah gambar nota", type=["png", "jpg", "jpeg"],
-            key="unggah_nota",
-        )
+        with st.container(border=True, key="unggah_kartu"):
+            berkas = st.file_uploader(
+                "Unggah gambar nota", type=["png", "jpg", "jpeg"],
+                key="unggah_nota",
+            )
     with kol_panduan:
         with st.container(border=True):
             st.markdown("**Panduan unggah**")
@@ -699,8 +727,10 @@ def halaman_upload():
         st.info("Silakan unggah gambar nota untuk memulai.")
         return
 
-    st.success(f"Nota: {nama}")
-    with st.container(border=True):
+    with st.container(key="unggah_status_aktif"):
+        st.success(f"Nota aktif: {nama}")
+
+    with st.container(border=True, key="unggah_pratinjau"):
         st.subheader("Pratinjau Nota")
         st.image(gambar_rgb(gambar), width="stretch")
         st.caption(
@@ -708,36 +738,49 @@ def halaman_upload():
             "kualitasnya. Perbaikan dilakukan pada halaman Preprocessing."
         )
 
-    with st.container(border=True):
+    with st.container(border=True, key="unggah_panel_proses"):
         st.subheader("Proses Nota")
         st.caption(
             "Proses Nota memotong kertas nota, meluruskan perspektif, lalu "
             "menyimpan hasil deteksi field untuk halaman berikutnya."
         )
-        kol = st.columns([1, 2])
-        if kol[0].button("Proses Nota", type="primary", key="proses_nota"):
-            with st.spinner("Memproses nota (deteksi field)..."):
-                st.session_state["deteksi"] = jalankan_deteksi(gambar)
-                st.session_state["ocr_semua"] = None
-                st.session_state["ocr_kunci"] = None
+        with st.container(key="unggah_proses"):
+            if st.button(
+                "Proses Nota", type="primary", key="proses_nota", width="stretch"
+            ):
+                with st.spinner("Memproses nota (deteksi field)..."):
+                    st.session_state["deteksi"] = jalankan_deteksi(gambar)
+                    st.session_state["ocr_semua"] = None
+                    st.session_state["ocr_kunci"] = None
 
         if st.session_state.get("deteksi") is not None:
             det = st.session_state["deteksi"]
-            kol[1].success(
-                f"Nota berhasil diproses — {len(det['fields'])} field terdeteksi."
-            )
-            st.info(
-                "Lanjutkan ke halaman Preprocessing, Segmentasi Karakter, "
-                "Pengenalan Karakter, Hasil Ekstraksi, lalu Evaluasi."
-            )
+            with st.container(key="unggah_status_hasil"):
+                st.success(
+                    f"Nota berhasil diproses — {len(det['fields'])} field "
+                    "terdeteksi."
+                )
+            with st.container(key="unggah_lanjut"):
+                st.markdown("**Langkah berikutnya**")
+                st.markdown(
+                    "1. **Preprocessing** — crop kertas nota dan peningkatan "
+                    "kualitas gambar\n"
+                    "2. **Segmentasi Karakter** — teks dipisah menjadi satu "
+                    "kotak per karakter\n"
+                    "3. **Pengenalan Karakter** — CNN dengan dukungan Template "
+                    "Matching\n"
+                    "4. **Hasil Ekstraksi** — periksa, koreksi, lalu simpan "
+                    "data transaksi\n"
+                    "5. **Evaluasi** — bandingkan hasil OCR dengan ground "
+                    "truth nota\n"
+                )
 
 
 def halaman_preprocessing():
     kepala_halaman(
         "Preprocessing",
         "Menyiapkan gambar sebelum pengenalan: kertas nota dipotong dan "
-        "diluruskan, kontras dinaikkan, lalu citra dibinerkan agar tulisan "
-        "terpisah dari latar.",
+        "diluruskan, lalu kontras dinaikkan sebelum deteksi field.",
     )
     gambar = st.session_state.get("gambar_bgr")
     if gambar is None:
@@ -745,58 +788,73 @@ def halaman_preprocessing():
         return
 
     nama = st.session_state.get("nama_file")
-    pp = st.session_state.get("preproses")
-    if pp is None or pp.get("nama") != nama:
+    det = ambil_deteksi()
+    pp = det.get("preproses") if det else None
+    if pp is None or "bbox_pratinjau" not in pp:
+        cache = st.session_state.get("preproses")
+        pp = cache if cache and cache.get("nama") == nama else None
+    if pp is None or "bbox_pratinjau" not in pp:
         with st.spinner("Menyiapkan preprocessing (crop + peningkatan kualitas)..."):
             pp = preprocess_nota(gambar)
             pp["nama"] = nama
             st.session_state["preproses"] = pp
 
-    hasil = pp["hasil"]
-    tampil = pp.get("tampil", hasil)
+    bbox_kertas = pp["bbox_kertas"]
+    if bbox_kertas is None:
+        crop_tampil = pp["crop_dasar"]
+        hasil_tampil = pp["hasil"]
+    else:
+        x, y = bbox_kertas[:2]
+        kiri, atas, kanan, bawah = pp["bbox_pratinjau"]
+        crop_tampil = pp["crop"]
+        hasil_tampil = pp["hasil"][y + atas:y + bawah, x + kiri:x + kanan]
 
     st.subheader("1. Crop dan koreksi perspektif")
     st.caption(
-        "Batas kertas dicari dengan ambang Otsu dan cadangan tepi Canny, lalu "
-        "gambar dipotong dan diluruskan memakai transformasi perspektif empat "
-        "titik sudut agar teks sejajar."
+        "Batas kertas diperkirakan dari intensitas, tepi, atau area isi nota. "
+        "Koreksi perspektif diterapkan ketika empat sudut kertas dapat digunakan."
     )
-    with st.container(border=True):
-        a, b = st.columns(2)
-        a.image(gambar_rgb(pp["asli"]), caption="Nota asli", width="stretch")
-        b.image(gambar_rgb(pp["crop"]), caption="Hasil crop kertas nota",
+    with st.container(key="pre_banding"):
+        a, b = st.columns(2, gap="medium")
+        a.image(gambar_rgb(pp["asli"]), caption="Nota Asli", width="stretch")
+        b.image(gambar_rgb(crop_tampil), caption="Hasil Crop Nota",
                 width="stretch")
+    if bbox_kertas is not None:
+        st.caption(
+            "Hasil Crop Nota adalah pratinjau area kertas yang dapat lebih rapat "
+            "dari crop dasar. Pipeline A menjalankan Contrast Stretching pada "
+            "crop dasar, lalu mengembalikan hasilnya ke kanvas asli untuk deteksi field."
+        )
+    else:
+        st.caption("Batas kertas belum ditemukan. Foto utuh ditampilkan dan Contrast Stretching dilewati.")
 
     st.subheader("2. Peningkatan kualitas gambar")
     st.caption(
-        f"Metode yang dipakai: {pp['metode']}. Kontras dinaikkan pada kanal "
-        "luminansi agar tulisan lebih tegas tanpa memperkuat noise kertas."
+        f"Metode yang dipakai: {pp['metode']}. Pratinjau ini menampilkan wilayah "
+        "yang sama dengan Hasil Crop Nota."
     )
-    with st.container(border=True):
-        st.image(gambar_rgb(tampil), caption="Hasil akhir preprocessing",
+    with st.container(key="pre_tunggal"):
+        st.image(gambar_rgb(hasil_tampil), caption="Pratinjau Peningkatan Kualitas Gambar",
                  width="stretch")
 
     st.subheader("3. Binerisasi")
     st.caption(
-        "Citra diubah ke grayscale lalu dibinerkan dengan ambang Otsu, "
-        "sehingga tinta menjadi hitam dan latar putih sebagai dasar "
-        "pemisahan karakter."
+        "Grayscale dibuat dari pratinjau peningkatan kualitas, lalu Otsu "
+        "dihitung dari Grayscale tersebut. Segmentasi OCR menghitung "
+        "binarisasi pada setiap crop field."
     )
-    abu = cv2.cvtColor(tampil, cv2.COLOR_BGR2GRAY)
+    abu = cv2.cvtColor(hasil_tampil, cv2.COLOR_BGR2GRAY)
     _, otsu = cv2.threshold(
         abu, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
     )
-    with st.container(border=True):
+    with st.container(key="pre_biner"):
         c1, c2 = st.columns(2)
         c1.image(abu, caption="Grayscale", width="stretch")
-        c2.image(otsu, caption="Binarisasi Otsu", width="stretch")
+        c2.image(otsu, caption="Pratinjau Binarisasi Otsu", width="stretch")
 
 
-# Nama tampilan dan urutan jenis field. Dipakai bersama oleh halaman
-# Segmentasi dan Pengenalan agar kedua halaman menampilkan field yang sama.
-# Field "satuan" sengaja tidak ditampilkan: isinya tidak dipakai pada data
-# transaksi (jumlah dan satuan sudah dipisah saat deteksi, dan yang disimpan
-# hanya jumlah), sehingga tab Satuan hanya menambah halaman tanpa manfaat.
+# Nama tampilan dan urutan keenam jenis field ekstraksi. Satuan hanya
+# dipakai saat mencari batas crop jumlah.
 LABEL_JENIS = {
     "nomor": "Nomor Nota",
     "penerima": "Nama Penerima",
@@ -839,6 +897,29 @@ def halaman_segmentasi():
     if det is None:
         st.info("Klik 'Proses Nota' di halaman Upload terlebih dahulu.")
         return
+
+    st.subheader("Deteksi Lokasi Field")
+    fields = _field_berkotak(det["fields"])
+    with st.container(horizontal_alignment="center"):
+        panel_lokasi = st.container(width=580)
+        panel_lokasi.image(
+            gambar_rgb(gambar_kotak_field(det["kecil"], fields)),
+            caption="Kanvas preprocessing dengan lokasi crop setiap field",
+            width="stretch",
+        )
+        if fields:
+            legenda = []
+            for nomor, f in enumerate(fields, 1):
+                b, g, r = WARNA_FIELD[f["jenis"]]
+                legenda.append(
+                    f'<span style="white-space:nowrap"><b style="color:rgb({r},{g},{b})">'
+                    f'{nomor}</b> {f["label"]}</span>'
+                )
+            panel_lokasi.markdown(
+                '<div style="max-width:580px;margin:auto;text-align:center;font-size:.82rem;'
+                'line-height:1.8;color:#142D4E">' + ' &nbsp;·&nbsp; '.join(legenda) + '</div>',
+                unsafe_allow_html=True,
+            )
 
     # Segmentasi seluruh field dihitung sekali di awal. Hasilnya sudah
     # di-cache, sehingga memakai tabs tidak menambah waktu proses.
@@ -900,22 +981,23 @@ def _tampilkan_field_segmen(f, d, label, jumlah_field, urutan):
         karakter = d["karakter"]
         st.caption(f"{len(karakter)} karakter terdeteksi")
 
-        kiri, kanan = st.columns(2)
-        with kiri:
-            st.image(
-                gambar_rgb(d["crop"]),
-                caption="Citra asli field",
-                width="stretch",
-            )
-        with kanan:
-            if d["vis"] is not None:
+        with st.container(key=f"bidang_{f['id']}"):
+            kiri, kanan = st.columns(2, gap="medium")
+            with kiri:
                 st.image(
-                    gambar_rgb(d["vis"]),
-                    caption="Bounding box karakter",
+                    gambar_rgb(d["crop"]),
+                    caption="Citra asli field",
                     width="stretch",
                 )
-            else:
-                st.caption("Bounding box tidak tersedia.")
+            with kanan:
+                if d["vis"] is not None:
+                    st.image(
+                        gambar_rgb(d["vis"]),
+                        caption="Bounding box karakter",
+                        width="stretch",
+                    )
+                else:
+                    st.caption("Bounding box tidak tersedia.")
 
         st.markdown("**Hasil Pemisahan Karakter**")
 
@@ -923,24 +1005,13 @@ def _tampilkan_field_segmen(f, d, label, jumlah_field, urutan):
             st.caption("Tidak ada karakter yang tersegmentasi.")
             return
 
-        # Maksimal 6 potongan per baris. Jumlah kolom dibuat tetap agar lebar
-        # gambar antar baris konsisten.
-        per_baris = 6
-        for mulai in range(0, len(karakter), per_baris):
-            irisan = karakter[mulai:mulai + per_baris]
-            kolom = st.columns(per_baris)
-            for slot, k in enumerate(irisan):
-                with kolom[slot]:
-                    potong = d["crop"][k["y1"]:k["y2"], k["x1"]:k["x2"]]
-                    nomor_karakter = mulai + slot + 1
-                    if getattr(potong, "size", 0):
-                        st.image(
-                            gambar_rgb(potong),
-                            caption=f"Karakter {nomor_karakter}",
-                            width="stretch",
-                        )
-                    else:
-                        st.caption(f"Karakter {nomor_karakter}")
+        with st.container(key=f"galeri_{f['id']}"):
+            for nomor_karakter, k in enumerate(karakter, 1):
+                potong = d["crop"][k["y1"]:k["y2"], k["x1"]:k["x2"]]
+                with st.container(key=f"kartu_karakter_{f['id']}_{nomor_karakter}"):
+                    if potong.size:
+                        st.image(gambar_rgb(potong), width="stretch")
+                    st.caption(f"Karakter {nomor_karakter}")
 
 
 def kenali_satu(crop, pakai_clahe, jenis=None):
@@ -954,11 +1025,13 @@ def jalankan_ocr_semua(det, sertakan_clahe):
     kosong = {"cnn": "", "tm": "", "n": 0, "status": "crop_kosong"}
     hasil = {}
     for f in det["fields"]:
+        jenis = f.get("jenis")
+        if jenis not in JENIS_TAMPIL:
+            continue
         crop = f["crop_ocr"]
         if crop is None or getattr(crop, "size", 0) == 0:
             hasil[f["id"]] = {"tanpa": kosong, "clahe": kosong}
             continue
-        jenis = f.get("jenis")
         tanpa = kenali_satu(crop, False, jenis)
         clahe = kenali_satu(crop, True, jenis) if sertakan_clahe else \
             {"cnn": "", "tm": "", "n": 0, "status": "-"}
@@ -1104,14 +1177,13 @@ def _gambar_pratinjau(det, nama):
 
     Mengembalikan (gambar, keterangan).
     """
-    pp = st.session_state.get("preproses")
-    if not pp or pp.get("nama") != nama:
-        # Hasil preprocessing juga disimpan pada hasil deteksi, sehingga
-        # halaman ini tetap benar walau halaman Preprocessing belum dibuka.
-        pp = (det or {}).get("preproses")
+    pp = (det or {}).get("preproses")
+    if not pp:
+        cache = st.session_state.get("preproses")
+        pp = cache if cache and cache.get("nama") == nama else None
 
     if pp:
-        for kunci in ("tampil", "crop", "hasil"):
+        for kunci in ("hasil", "crop", "tampil"):
             gambar = pp.get(kunci)
             if gambar is not None and getattr(gambar, "size", 0):
                 return gambar, "Hasil crop kertas nota"
@@ -1581,7 +1653,7 @@ def halaman_business_understanding():
 # Jenis field yang dinilai pada halaman Evaluasi, sesuai daftar field
 # penelitian: nomor nota, nama penerima, proyek, nama produk, jumlah,
 # dan harga satuan. Field "satuan" tidak termasuk daftar tersebut.
-JENIS_DIEVALUASI = ("nomor", "penerima", "proyek", "produk", "jumlah", "harga")
+JENIS_DIEVALUASI = JENIS_TAMPIL
 
 
 def _isi_gt(kunci_widget, kunci_gt):

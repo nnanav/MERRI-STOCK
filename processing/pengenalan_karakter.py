@@ -448,8 +448,16 @@ def rapikan_teks(teks, jenis=None):
     """
     if jenis in JENIS_NUMERIK:
         return bersihkan_numerik(teks)
-    if jenis == "produk":
-        return rapikan_huruf(rapikan_angka_menempel(rapikan_kali(teks)))
+    if jenis == "produk" and teks:
+        import re
+
+        # Akhiran huruf tunggal adalah bagian yang sah dari token produk.
+        # Kedekatannya dengan angka saja tidak cukup untuk mengubahnya.
+        return "".join(
+            token if re.fullmatch(r"\d+[^\W\d_]", token)
+            else rapikan_huruf(rapikan_angka_menempel(rapikan_kali(token)))
+            for token in re.split(r"(\s+)", teks)
+        )
     if jenis in ("nomor", "penerima", "proyek"):
         return rapikan_huruf(rapikan_angka_menempel(teks))
     return teks

@@ -645,7 +645,296 @@ CSS_KOMPONEN = """
 
 
 
-CSS = CSS_DASAR + _CSS_SIDEBAR + CSS_KOMPONEN
+# ============================================================
+# TAMPILAN HALAMAN KERJA
+# ============================================================
+# CSS di bawah hanya mengatur TAMPILAN halaman Upload Nota, Preprocessing,
+# dan Segmentasi Karakter. Tidak ada perubahan pada perhitungan gambar,
+# segmentasi, maupun pengenalan: yang diubah hanya ukuran tampilan.
+#
+# Setiap area yang ditata dibungkus st.container(key=...) sehingga CSS
+# hanya menyasar area tersebut. Streamlit memberi kelas "st-key-<key>"
+# pada container ber-key, dan pemilih [class*="st-key-galeri_"] dipakai
+# agar satu aturan berlaku untuk semua galeri (satu per field).
+#
+# Struktur elemen gambar bawaan Streamlit yang dipakai:
+#   [data-testid="stImageContainer"]  -> pembungkus satu gambar + caption
+#   img                               -> gambarnya
+#   [data-testid="stImageCaption"]    -> label tepat di bawah gambar
+
+CSS_HALAMAN_KERJA = """
+/* ============================================================
+   1. UPLOAD NOTA
+   ============================================================ */
+
+/* ---------- Kartu unggah ---------- */
+[class*="st-key-unggah_kartu"] [data-testid="stFileUploaderDropzone"] {
+  background: #FBFDFF;
+  border: 1.5px dashed #C9D6E4;
+  border-radius: 12px;
+  padding: 1.75rem 1.25rem;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+[class*="st-key-unggah_kartu"] [data-testid="stFileUploaderDropzone"]:hover {
+  border-color: #0D9488;
+  background: #F4FBF9;
+}
+
+/* ---------- Tombol Proses Nota: di tengah, ukuran proporsional ---------- */
+[class*="st-key-unggah_panel_proses"] h3,
+[class*="st-key-unggah_panel_proses"] [data-testid="stCaptionContainer"] {
+  text-align: center;
+}
+
+[class*="st-key-unggah_proses"] [data-testid="stButton"] {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+}
+
+[class*="st-key-unggah_proses"] [data-testid="stButton"] button {
+  width: 100%;
+  max-width: 14rem;
+  margin-inline: auto;
+  min-height: 2.75rem;
+  padding: 0.62rem 1.75rem;
+  font-size: 0.9rem;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  border-radius: 11px;
+  box-shadow: 0 8px 18px rgba(13, 148, 136, 0.22);
+}
+
+[class*="st-key-unggah_proses"] [data-testid="stButton"] button:hover {
+  box-shadow: 0 10px 22px rgba(13, 148, 136, 0.3);
+}
+
+/* ---------- Pesan status ---------- */
+[class*="st-key-unggah_status"] [data-testid="stAlert"] {
+  border: 1px solid #BFE7E1;
+  border-left: 4px solid #0D9488;
+  border-radius: 10px;
+  background: #F1FAF8;
+  padding: 0.7rem 1rem;
+}
+
+[class*="st-key-unggah_status"] [data-testid="stAlert"] p {
+  color: #0F5F58;
+  font-weight: 600;
+  font-size: 0.87rem;
+  line-height: 1.5;
+}
+
+/* ---------- Petunjuk langkah berikutnya ---------- */
+[class*="st-key-unggah_lanjut"] {
+  background: #F8FAFC;
+  border: 1px solid #DCE5EF;
+  border-radius: 12px;
+  padding: 1rem 1.15rem;
+}
+
+[class*="st-key-unggah_lanjut"] [data-testid="stMarkdown"] p:has(> strong:only-child) {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #142D4E;
+}
+
+[class*="st-key-unggah_lanjut"] [data-testid="stMarkdown"] ol {
+  margin: 0;
+  padding-left: 1.15rem;
+}
+
+[class*="st-key-unggah_lanjut"] [data-testid="stMarkdown"] li {
+  font-size: 0.85rem;
+  line-height: 1.75;
+  color: #334155;
+}
+
+[class*="st-key-unggah_lanjut"] [data-testid="stMarkdown"] li::marker {
+  color: #0D9488;
+  font-weight: 700;
+}
+
+/* ---------- Pratinjau nota ---------- */
+[class*="st-key-unggah_pratinjau"] [data-testid="stImageContainer"] img {
+  width: 100% !important;
+  height: auto !important;
+  max-height: 420px;
+  object-fit: contain;
+  object-position: center;
+  background: #F8FAFC;
+}
+
+[class*="st-key-unggah_pratinjau"] [data-testid="stImageCaption"] {
+  text-align: center;
+  font-size: 0.78rem;
+  color: #64748B;
+}
+
+/* ============================================================
+   2. PREPROCESSING
+   ============================================================ */
+
+/* ---------- Pasangan gambar sejajar ---------- */
+:is(.st-key-pre_banding, .st-key-pre_biner) [data-testid="stHorizontalBlock"] {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: clamp(0.5rem, 2vw, 1rem);
+}
+
+:is(.st-key-pre_banding, .st-key-pre_biner) [data-testid="stColumn"] {
+  width: 100% !important;
+  min-width: 0;
+}
+
+:is(.st-key-pre_banding, .st-key-pre_tunggal, .st-key-pre_biner) [data-testid="stImageContainer"] {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* Ratakan tepi bawah gambar agar label dekat dengan citra. */
+:is(.st-key-pre_banding, .st-key-pre_tunggal, .st-key-pre_biner) [data-testid="stImageContainer"] img {
+  display: block;
+  width: 100% !important;
+  object-fit: contain;
+  object-position: center bottom;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+
+:is(.st-key-pre_banding, .st-key-pre_biner) [data-testid="stImageContainer"] img {
+  height: clamp(7rem, 25vw, 19rem) !important;
+}
+
+.st-key-pre_tunggal [data-testid="stImageContainer"] img {
+  height: auto !important;
+  max-height: 19rem;
+}
+
+:is(.st-key-pre_banding, .st-key-pre_tunggal, .st-key-pre_biner) [data-testid="stImageCaption"] {
+  width: 100%;
+  margin: 0.3rem 0 0 !important;
+  padding: 0 !important;
+  text-align: center;
+}
+
+:is(.st-key-pre_banding, .st-key-pre_tunggal, .st-key-pre_biner) [data-testid="stImageCaption"] p {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 650;
+  color: #142D4E;
+}
+
+/* ============================================================
+   3. SEGMENTASI KARAKTER
+   ============================================================ */
+
+/* ---------- Dua gambar pembanding per field ---------- */
+[class*="st-key-bidang_"] [data-testid="stHorizontalBlock"] {
+  align-items: stretch;
+  gap: 0.9rem;
+}
+
+[class*="st-key-bidang_"] [data-testid="stImageContainer"] {
+  box-sizing: border-box;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+[class*="st-key-bidang_"] [data-testid="stImageContainer"] img {
+  box-sizing: border-box;
+  width: 100% !important;
+  height: 132px !important;
+  object-fit: contain;
+  object-position: center;
+  padding: 5px;
+  background: #F8FAFC;
+  border: 1px solid #DCE5EF !important;
+  border-radius: 10px !important;
+}
+
+[class*="st-key-bidang_"] [data-testid="stImageCaption"] {
+  width: 100%;
+  margin: 0.35rem 0 0 0 !important;
+  padding: 0 !important;
+  text-align: center;
+  font-size: 0.76rem;
+  color: #64748B;
+}
+
+/* ---------- Galeri pemisahan karakter ---------- */
+[data-testid="stVerticalBlock"][class*="st-key-galeri_"] {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 6.5rem), 1fr));
+  gap: 0.625rem;
+}
+
+[data-testid="stVerticalBlock"][class*="st-key-kartu_karakter_"] {
+  box-sizing: border-box;
+  min-width: 0;
+  gap: 0.375rem;
+  padding: 0.5rem;
+  background: #FFFFFF;
+  border: 1px solid #DCE5EF;
+  border-radius: 10px;
+  overflow: hidden;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+[data-testid="stVerticalBlock"][class*="st-key-kartu_karakter_"]:hover {
+  border-color: #0D9488;
+  box-shadow: 0 2px 8px rgba(13, 148, 136, 0.14);
+}
+
+/* object-fit: contain -> karakter di tengah kotak, rasio tetap. */
+[class*="st-key-kartu_karakter_"] [data-testid="stImageContainer"] {
+  width: 100%;
+}
+
+[class*="st-key-kartu_karakter_"] [data-testid="stImageContainer"] img {
+  display: block;
+  width: 100% !important;
+  height: 4.5rem !important;
+  object-fit: contain;
+  object-position: center;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+}
+
+/* Sisakan area gambar juga ketika potongan kosong. */
+[data-testid="stVerticalBlock"][class*="st-key-kartu_karakter_"]:not(:has(img))::before {
+  content: "";
+  height: 4.5rem;
+}
+
+[class*="st-key-kartu_karakter_"] [data-testid="stCaptionContainer"] p {
+  margin: 0;
+  text-align: center;
+  font-size: 0.8125rem;
+  line-height: 1.25rem;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  color: #64748B;
+}
+
+/* ---------- Penyesuaian layar laptop kecil ---------- */
+@media (max-width: 1200px) {
+  [class*="st-key-bidang_"] [data-testid="stImageContainer"] img {
+    height: 116px !important;
+  }
+}
+"""
+
+
+CSS = CSS_DASAR + _CSS_SIDEBAR + CSS_KOMPONEN + CSS_HALAMAN_KERJA
 
 
 def pasang_tema():

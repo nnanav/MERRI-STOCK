@@ -552,6 +552,17 @@ def _rapikan_gabung_pecah(hasil, biner, tinggi_acuan,
             return None
         return biner[max(0, y1):min(H, y2), max(0, x1):min(W, x2)]
 
+    def tinta_menyambung(kiri, kanan, y1, y2):
+        # Kotak yang bersentuhan dapat memuat dua karakter berbeda.
+        # Cari jalur tinta yang melintas batas horizontal kedua potongan.
+        batas = kanan["x1"]
+        if kiri["x2"] < batas or not 0 < batas < W:
+            return False
+        a = biner[y1:y2, batas - 1] != 0
+        b = biner[y1:y2, batas] != 0
+        return bool(np.any(a & b) or np.any(a[1:] & b[:-1])
+                    or np.any(a[:-1] & b[1:]))
+
     # ---------- (A) GABUNG ----------
     busur = {"(", ")", "[", "]", "C", "c", "K", "G", "0", "O", "o", "Q"}
     huruf_bulat = {"O", "o", "0", "Q", "D", "C", "G", "c", "e", "a", "U"}
@@ -578,6 +589,8 @@ def _rapikan_gabung_pecah(hasil, biner, tinggi_acuan,
             continue
         y1 = min(cur["y1"], nxt["y1"])
         y2 = max(cur["y2"], nxt["y2"])
+        if not tinta_menyambung(cur, nxt, y1, y2):
+            continue
         pot = ambil(cur["x1"], y1, nxt["x2"], y2)
         if pot is not None:
             kandidat_gabung[i] = (y1, y2, pot)
@@ -645,6 +658,8 @@ def _rapikan_gabung_pecah(hasil, biner, tinggi_acuan,
 
         y1 = min(cur["y1"], nxt["y1"])
         y2 = max(cur["y2"], nxt["y2"])
+        if not tinta_menyambung(cur, nxt, y1, y2):
+            continue
         pot = ambil(cur["x1"], y1, nxt["x2"], y2)
         if pot is not None:
             kandidat2[i] = (y1, y2, pot, target)

@@ -5,7 +5,6 @@ Tanpa ground truth, kualitas diperiksa dari kewajaran hasil:
   - crop tidak kosong/pudar
   - nomor nota berupa 4 digit
   - jumlah & harga hanya berisi angka + pemisah ( . , )
-  - satuan pendek dan berupa huruf
 """
 
 import re
@@ -36,7 +35,6 @@ stat = {
     "nota": 0, "field": 0, "field_kosong": 0,
     "nomor_ok": 0, "nomor_total": 0,
     "angka_ok": 0, "angka_total": 0,
-    "satuan_ok": 0, "satuan_total": 0,
 }
 rincian = []
 
@@ -71,13 +69,10 @@ for path in sampel:
         stat["nomor_total"] += 1
         stat["nomor_ok"] += int(bool(re.fullmatch(r"\d{4}", nomor)))
 
-    for fid, (jenis, teks) in hasil.items():
+    for jenis, teks in hasil.values():
         if jenis in ("jumlah", "harga") and teks:
             stat["angka_total"] += 1
             stat["angka_ok"] += int(bool(RE_ANGKA.fullmatch(teks.replace(" ", ""))))
-        if jenis == "satuan" and teks:
-            stat["satuan_total"] += 1
-            stat["satuan_ok"] += int(bool(re.fullmatch(r"[A-Za-z]{2,4}", teks)))
 
     rincian.append(
         f"{path.name:16s} field={len(det['fields']):2d} "
@@ -95,5 +90,3 @@ print(f"Nomor nota 4 digit   : {stat['nomor_ok']}/{stat['nomor_total']} "
       f"({stat['nomor_ok']/max(1,stat['nomor_total'])*100:.1f}%)")
 print(f"Jumlah/harga numerik : {stat['angka_ok']}/{stat['angka_total']} "
       f"({stat['angka_ok']/max(1,stat['angka_total'])*100:.1f}%)")
-print(f"Satuan wajar         : {stat['satuan_ok']}/{stat['satuan_total']} "
-      f"({stat['satuan_ok']/max(1,stat['satuan_total'])*100:.1f}%)")
